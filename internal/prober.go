@@ -26,7 +26,14 @@ func NewProber(store Store, controller *Controller) *Prober {
 	return &Prober{
 		store:      store,
 		controller: controller,
-		httpClient: &http.Client{Timeout: 5 * time.Second},
+		httpClient: &http.Client{
+            Timeout: 5 * time.Second,
+            Transport: &http.Transport{
+                TLSClientConfig: &tls.Config{
+                    InsecureSkipVerify: true,
+                },
+            },
+        },
 		stopCh:     make(chan struct{}),
 		running:    make(map[string]struct{}),
 	}
