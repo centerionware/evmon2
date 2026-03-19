@@ -18,23 +18,31 @@ jobs:
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
 
-      - name: Add upstream remote
+      - name: Add upstream remote and fetch
         run: |
           git remote add upstream https://git.centerionware.com/0xdeadc0de/evmon.git
           git fetch upstream
 
-      - name: Overwrite GitHub main with upstream
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create PR branch with upstream changes
         run: |
           UPSTREAM_BRANCH=$(git remote show upstream | grep 'HEAD branch' | awk '{print $NF}')
           echo "Upstream default branch: $UPSTREAM_BRANCH"
 
-          git checkout main
+          # Create new branch for the PR
+          git checkout -b sync-from-upstream
+
+          # Reset branch to upstream commit
           git reset --hard upstream/$UPSTREAM_BRANCH
 
-          # Push using the Actions token to avoid 403
-          git push https://x-access-token:${GITHUB_TOKEN}@github.com/centerionware/evmon.git main --force
+          # Push branch to GitHub
+          git push -u origin sync-from-upstream --force
 
-      - name: Done
-        run: echo "GitHub main branch successfully overwritten with upstream."
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          title: "Sync from upstream"
+          body: "This PR updates GitHub main with the latest changes from upstream."
+          base: main
+          head: sync-from-upstream
+          draft: false
