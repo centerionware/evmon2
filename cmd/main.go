@@ -9,7 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
-    "fmt"
+	"fmt"
 
 	_ "modernc.org/sqlite"
 	_ "github.com/lib/pq"
@@ -69,151 +69,105 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to get cluster config: %v", err)
 	}
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		log.Fatalf("failed to create clientset: %v", err)
+	clientset, _ := kubernetes.NewForConfig(config)
+	dynClient, _ := dynamic.NewForConfig(config)
+
+	ctx := context.Background()
+
+	// initial sync to populate controller
+	controller.SyncIngresses(ctx)
+	controller.SyncCRDs(ctx)
+
+	// cleanup
+	existingServices, _ := store.ListServices()
+	valid := map[string]struct{}{}
+	for _, t := range controller.ListTargets() {
+		valid[t.ServiceID] = struct{}{}
 	}
-	dynClient, err := dynamic.NewForConfig(config)
-	if err != nil {
-		log.Fatalf("failed to create dynamic client: %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// --- Initial cleanup ---
-	existingServices, err := store.ListServices()
-	if err != nil {
-		log.Printf("failed to list services for cleanup: %v", err)
-	} else {
-		cleanupMap := map[string]struct{}{}
-		for _, svc := range existingServices {
-			cleanupMap[svc.ID] = struct{}{}
-		}
-
-		// Scan cluster ingresses
-		ings, err := clientset.NetworkingV1().Ingresses("").List(ctx, metav1.ListOptions{})
-		if err == nil {
-			for _, ing := range ings.Items {
-				for _, rule := range ing.Spec.Rules {
-					if rule.HTTP == nil {
-						continue
-					}
-					for _, path := range rule.HTTP.Paths {
-						svcID := fmt.Sprintf("%s/%s", ing.Namespace, path.Backend.Service.Name)
-						delete(cleanupMap, svcID)
-						if rule.Host != "" {
-							delete(cleanupMap, "External/"+rule.Host)
-						}
-					}
-				}
-			}
-		}
-
-		// Scan CRDs
-		evmonGVR := schema.GroupVersionResource{
-			Group:    "evmon.centerionware.com",
-			Version:  "v1",
-			Resource: "evmonendpoints",
-		}
-		crds, err := dynClient.Resource(evmonGVR).Namespace("").List(ctx, metav1.ListOptions{})
-		if err == nil {
-			for _, obj := range crds.Items {
-				spec, ok := obj.Object["spec"].(map[string]interface{})
-				if !ok {
-					continue
-				}
-				svcID, ok := spec["serviceID"].(string)
-				if ok && svcID != "" {
-					delete(cleanupMap, svcID)
-				}
-			}
-		}
-
-		// Delete remaining stale services
-		for id := range cleanupMap {
-			if err := store.DeleteService(id); err != nil {
-				log.Printf("failed to delete stale service %s: %v", id, err)
-			}
+	for _, svc := range existingServices {
+		if _, ok := valid[svc.ID]; !ok {
+			store.DeleteService(svc.ID)
 		}
 	}
 
-	// --- Ingress informer ---
+	// informers
 	factory := informers.NewSharedInformerFactory(clientset, 0)
 	ingInformer := factory.Networking().V1().Ingresses().Informer()
 
 	ingInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			ing := obj.(*networkingv1.Ingress)
-			internalTargets := buildInternalTargets(controller, clientset, ing)
-			for _, t := range internalTargets {
-				if _, err := store.GetOrCreateService(t.ServiceID); err != nil {
-					log.Printf("failed to create internal service: %v", err)
-				}
-			}
 
-			externalTargets := buildExternalTargets(ing)
-			for _, t := range externalTargets {
-				if _, err := store.GetOrCreateService(t.ServiceID); err != nil {
-					log.Printf("failed to create external service: %v", err)
-				}
+			for _, t := range buildInternalTargets(clientset, ing) {
+				controller.AddTarget(t)
+				store.GetOrCreateService(t.ServiceID)
+			}
+			for _, t := range buildExternalTargets(ing) {
+				controller.AddTarget(t)
+				store.GetOrCreateService(t.ServiceID)
 			}
 		},
 		DeleteFunc: func(obj interface{}) {
 			ing := obj.(*networkingv1.Ingress)
-			for _, t := range buildInternalTargets(controller, clientset, ing) {
+
+			for _, t := range buildInternalTargets(clientset, ing) {
+				controller.RemoveTarget(t)
 				store.DeleteService(t.ServiceID)
 			}
 			for _, t := range buildExternalTargets(ing) {
+				controller.RemoveTarget(t)
 				store.DeleteService(t.ServiceID)
 			}
 		},
 	})
 
-	// --- CRD informer ---
 	gvr := schema.GroupVersionResource{
 		Group:    "evmon.centerionware.com",
 		Version:  "v1",
 		Resource: "evmonendpoints",
 	}
-	crdInformer := dynamicinformer.NewFilteredDynamicInformer(
-		dynClient,
-		gvr,
-		metav1.NamespaceAll,
-		0,
-		cache.Indexers{},
-		nil,
-	)
-	crdInformerInf := crdInformer.Informer()
 
-	crdInformerInf.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	crdInf := dynamicinformer.NewFilteredDynamicInformer(
+		dynClient, gvr, metav1.NamespaceAll, 0, cache.Indexers{}, nil,
+	).Informer()
+
+	crdInf.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			u := obj.(*unstructured.Unstructured)
-			spec, ok := u.Object["spec"].(map[string]interface{})
-			if !ok {
-				return
+			spec := u.Object["spec"].(map[string]interface{})
+
+			serviceID := u.GetName()
+			if v, ok := spec["serviceID"].(string); ok && v != "" {
+				serviceID = v
 			}
-			serviceID, ok := spec["serviceID"].(string)
-			if !ok || serviceID == "" {
-				serviceID = u.GetName()
-			}
-			if _, err := store.GetOrCreateService(serviceID); err != nil {
-				log.Printf("failed to create CRD service: %v", err)
-			}
+
+			url, _ := spec["url"].(string)
+
+			controller.AddTarget(internal.Target{
+				ServiceID: serviceID,
+				URL:       url,
+				Internal:  false,
+			})
+
+			store.GetOrCreateService(serviceID)
 		},
 		DeleteFunc: func(obj interface{}) {
 			u := obj.(*unstructured.Unstructured)
-			spec, ok := u.Object["spec"].(map[string]interface{})
-			if !ok {
-				return
+			spec := u.Object["spec"].(map[string]interface{})
+
+			serviceID := u.GetName()
+			if v, ok := spec["serviceID"].(string); ok && v != "" {
+				serviceID = v
 			}
-			serviceID, ok := spec["serviceID"].(string)
-			if !ok || serviceID == "" {
-				serviceID = u.GetName()
-			}
-			if err := store.DeleteService(serviceID); err != nil {
-				log.Printf("failed to delete CRD service: %v", err)
-			}
+
+			url, _ := spec["url"].(string)
+
+			controller.RemoveTarget(internal.Target{
+				ServiceID: serviceID,
+				URL:       url,
+			})
+
+			store.DeleteService(serviceID)
 		},
 	})
 
@@ -221,11 +175,9 @@ func main() {
 	defer close(stopCh)
 
 	go ingInformer.Run(stopCh)
-	go crdInformerInf.Run(stopCh)
+	go crdInf.Run(stopCh)
 
-	if !cache.WaitForCacheSync(stopCh, ingInformer.HasSynced, crdInformerInf.HasSynced) {
-		log.Fatal("failed to sync caches")
-	}
+	cache.WaitForCacheSync(stopCh, ingInformer.HasSynced, crdInf.HasSynced)
 
 	prober := internal.NewProber(store, controller)
 	prober.Start()
@@ -235,78 +187,70 @@ func main() {
 	mux := http.NewServeMux()
 	api.RegisterRoutes(mux)
 
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
-	})
+	server := &http.Server{Addr: ":8080", Handler: mux}
 
-	server := &http.Server{
-		Addr:    ":8080",
-		Handler: mux,
-	}
-
-	stopSig := make(chan os.Signal, 1)
-	signal.Notify(stopSig, syscall.SIGINT, syscall.SIGTERM)
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 
 	go server.ListenAndServe()
 
-	<-stopSig
-	log.Println("shutting down...")
+	<-sig
 	server.Shutdown(ctx)
 }
 
-// --- Helpers for targets ---
-func buildInternalTargets(c *internal.Controller, cs *kubernetes.Clientset, ing *networkingv1.Ingress) []internal.Target {
+func buildInternalTargets(cs *kubernetes.Clientset, ing *networkingv1.Ingress) []internal.Target {
 	var targets []internal.Target
+
 	for _, rule := range ing.Spec.Rules {
 		if rule.HTTP == nil {
 			continue
 		}
 		for _, path := range rule.HTTP.Paths {
-			svcName := path.Backend.Service.Name
+			svc := path.Backend.Service.Name
 			port := path.Backend.Service.Port.Number
+
 			if port == 0 && path.Backend.Service.Port.Name != "" {
-				svc, err := cs.CoreV1().Services(ing.Namespace).Get(context.TODO(), svcName, metav1.GetOptions{})
+				s, err := cs.CoreV1().Services(ing.Namespace).Get(context.TODO(), svc, metav1.GetOptions{})
 				if err != nil {
 					continue
 				}
-				for _, p := range svc.Spec.Ports {
+				for _, p := range s.Spec.Ports {
 					if p.Name == path.Backend.Service.Port.Name {
 						port = p.Port
-						break
 					}
 				}
 			}
+
 			if port == 0 {
 				continue
 			}
-			serviceID := fmt.Sprintf("%s/%s", ing.Namespace, svcName)
-			url := fmt.Sprintf("%s.%s.svc.cluster.local:%d", svcName, ing.Namespace, port)
+
 			targets = append(targets, internal.Target{
-				ServiceID: serviceID,
-				URL:       url,
+				ServiceID: fmt.Sprintf("%s/%s", ing.Namespace, svc),
+				URL:       fmt.Sprintf("%s.%s.svc.cluster.local:%d", svc, ing.Namespace, port),
 				Internal:  true,
 				Interval:  30 * time.Second,
 			})
 		}
 	}
+
 	return targets
 }
 
 func buildExternalTargets(ing *networkingv1.Ingress) []internal.Target {
 	var targets []internal.Target
+
 	for _, rule := range ing.Spec.Rules {
 		if rule.Host == "" {
 			continue
 		}
-		svcID := "External/" + rule.Host
-		url := "https://" + rule.Host
 		targets = append(targets, internal.Target{
-			ServiceID: svcID,
-			URL:       url,
+			ServiceID: "External/" + rule.Host,
+			URL:       "https://" + rule.Host,
 			Internal:  false,
 			Interval:  300 * time.Second,
 		})
 	}
+
 	return targets
 }
