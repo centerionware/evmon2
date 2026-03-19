@@ -10,22 +10,21 @@ import (
 	"syscall"
 	"time"
 
-	_ "modernc.org/sqlite"             // SQLite driver
-	_ "github.com/lib/pq"              // Postgres driver
-	_ "github.com/go-sql-driver/mysql" // MariaDB/MySQL driver
+	_ "modernc.org/sqlite"
+	_ "github.com/lib/pq"
+	_ "github.com/go-sql-driver/mysql"
 	"centerionware.com/evmon/internal"
 )
 
 func main() {
-	dbType := os.Getenv("EVMON_DB_TYPE")       // "sqlite", "postgres", "mariadb"
-	dbURL := os.Getenv("EVMON_DATABASE_URL")   // full connection string
+	dbType := os.Getenv("EVMON_DB_TYPE")
+	dbURL := os.Getenv("EVMON_DATABASE_URL")
 
 	var db *sql.DB
 	var err error
 
 	switch dbType {
 	case "", "sqlite":
-		// Default to SQLite if empty or explicitly sqlite
 		if dbURL == "" {
 			dbURL = "file:evmon.db?_foreign_keys=on"
 		}
@@ -49,10 +48,11 @@ func main() {
 	}
 	defer db.Close()
 
-	// Initialize store
 	store := internal.NewDBStore(db)
+	if err := store.Migrate(); err != nil {
+		log.Fatalf("failed to migrate database: %v", err)
+	}
 
-	// Initialize controller
 	controller, err := internal.NewController()
 	if err != nil {
 		log.Fatalf("failed to create controller: %v", err)
@@ -61,7 +61,6 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Initial sync
 	if err := controller.SyncIngresses(ctx); err != nil {
 		log.Printf("warning: failed to sync ingresses: %v", err)
 	}
@@ -69,7 +68,6 @@ func main() {
 		log.Printf("warning: failed to sync CRDs: %v", err)
 	}
 
-	// Periodic resync
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
@@ -88,22 +86,24 @@ func main() {
 		}
 	}()
 
-	// Start prober
 	prober := internal.NewProber(store, controller)
 	prober.Start()
 	defer prober.Stop()
 
-	// HTTP API
 	api := internal.NewAPI(store)
 	mux := http.NewServeMux()
 	api.RegisterRoutes(mux)
+
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
 
 	server := &http.Server{
 		Addr:    ":8080",
 		Handler: mux,
 	}
 
-	// Graceful shutdown
 	stopCh := make(chan os.Signal, 1)
 	signal.Notify(stopCh, syscall.SIGINT, syscall.SIGTERM)
 
