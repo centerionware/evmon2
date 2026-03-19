@@ -1,0 +1,14 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: evmon
+spec:
+  template:
+    spec:
+      containers:
+        - name: evmon
+          env:
+            - name: EVMON_DB_TYPE
+              value: "sqlite"
+            - name: EVMON_DATABASE_URL
+              value: "file:evmon.db?_foreign_keys=on"
