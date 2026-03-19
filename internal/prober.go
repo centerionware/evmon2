@@ -87,8 +87,9 @@ func (p *Prober) refreshTargets() {
 }
 
 // probeLoop probes a single target repeatedly
-func (p *Prober) probeLoop(target Target, key stringrepeatedlynterval := target.Interval
+func (p *Prober) probeLoop(target Target, key string) { 
     defer p.wg.Done()
+    interval := target.Interval
     if interval <= 0 {
 		if target.Internal {
 			interval = 30 * time.Second
