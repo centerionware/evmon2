@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -103,18 +102,6 @@ func main() {
 
 	log.Printf("initial targets loaded: %d", len(controller.ListTargets()))
 
-	log.Println("starting cleanup phase")
-	existingServices, _ := store.ListServices()
-	valid := map[string]struct{}{}
-	for _, t := range controller.ListTargets() {
-		valid[t.ServiceID] = struct{}{}
-	}
-	for _, svc := range existingServices {
-		if _, ok := valid[svc.ID]; !ok {
-			log.Printf("deleting stale service: %s", svc.ID)
-			store.DeleteService(svc.ID)
-		}
-	}
 
 	log.Println("setting up informers")
 	factory := informers.NewSharedInformerFactory(clientset, 0)
@@ -283,6 +270,20 @@ func main() {
 	cache.WaitForCacheSync(stopCh, ingInformer.HasSynced, crdInf.HasSynced)
 	log.Println("cache sync completed")
 
+    // --- move cleanup here ---
+    log.Println("starting cleanup phase")
+    existingServices, _ := store.ListServices()
+    valid := map[string]struct{}{}
+    for _, t := range controller.ListTargets() {
+        valid[t.ServiceID] = struct{}{}
+    }
+    for _, svc := range existingServices {
+        if _, ok := valid[svc.ID]; !ok {
+            log.Printf("deleting stale service: %s", svc.ID)
+            store.DeleteService(svc.ID)
+        }
+    }
+  
 	log.Println("starting prober")
 	prober := internal.NewProber(store, controller)
 	prober.Start()
