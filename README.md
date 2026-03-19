@@ -1,4 +1,3 @@
-
 # Evmon
 
 **Evmon** is a highly opinionated, small, and fast Kubernetes-native service monitor. It builds a list of services based on Ingress objects, targets the internal service inside the cluster, and probes it every 30 seconds. External hosts of the ingress are probed every 5 minutes to minimize external traffic.  
@@ -97,7 +96,7 @@ metadata:
 spec:
   url: https://google.com
   serviceID: Google
-  metadata: 300
+  intervalSeconds: 300
 ```
 
 ---
