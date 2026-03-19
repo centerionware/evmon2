@@ -1,3 +1,4 @@
+```go
 // internal/prober.go
 package internal
 
@@ -12,8 +13,12 @@ type Prober struct {
 	store      Store
 	controller *Controller
 	httpClient *http.Client
-	wg         sync.WaitGroup
-	stopCh     chan struct{}
+
+	wg     sync.WaitGroup
+	stopCh chan struct{}
+
+	mu      sync.Mutex
+	running map[string]struct{} // tracks active probe loops
 }
 
 // NewProber creates a new Prober
@@ -21,20 +26,15 @@ func NewProber(store Store, controller *Controller) *Prober {
 	return &Prober{
 		store:      store,
 		controller: controller,
-		httpClient: &http.Client{
-			Timeout: 5 * time.Second,
-		},
-		stopCh: make(chan struct{}),
+		httpClient: &http.Client{Timeout: 5 * time.Second},
+		stopCh:     make(chan struct{}),
+		running:    make(map[string]struct{}),
 	}
 }
 
 // Start begins the probing loops
 func (p *Prober) Start() {
-	targets := p.controller.ListTargets()
-	for _, target := range targets {
-		p.wg.Add(1)
-		go p.probeLoop(target)
-	}
+	p.refreshTargets()
 
 	// periodically refresh targets
 	go func() {
@@ -59,15 +59,26 @@ func (p *Prober) Stop() {
 
 // refreshTargets starts probe loops for any new targets discovered
 func (p *Prober) refreshTargets() {
-	currentTargets := p.controller.ListTargets()
-	for _, t := range currentTargets {
+	targets := p.controller.ListTargets()
+
+	for _, t := range targets {
+		key := t.ServiceID + "|" + t.URL
+
+		p.mu.Lock()
+		if _, exists := p.running[key]; exists {
+			p.mu.Unlock()
+			continue // already probing this target
+		}
+		p.running[key] = struct{}{}
+		p.mu.Unlock()
+
 		p.wg.Add(1)
-		go p.probeLoop(t)
+		go p.probeLoop(t, key)
 	}
 }
 
 // probeLoop probes a single target at the interval defined by the controller
-func (p *Prober) probeLoop(target Target) {
+func (p *Prober) probeLoop(target Target, key string) {
 	defer p.wg.Done()
 
 	interval := target.Interval
@@ -94,6 +105,13 @@ func (p *Prober) probeLoop(target Target) {
 
 // probeTarget performs a single probe and updates the store
 func (p *Prober) probeTarget(target Target) {
+	// ✅ Ensure service exists
+	_, err := p.store.GetOrCreateService(target.ServiceID)
+	if err != nil {
+		println("error creating service:", err.Error())
+		return
+	}
+
 	status := StatusDown
 
 	req, err := http.NewRequest("HEAD", target.URL, nil)
@@ -114,3 +132,4 @@ func (p *Prober) probeTarget(target Target) {
 		println("error writing event:", err.Error())
 	}
 }
+```
