@@ -7,42 +7,40 @@ import (
 	"time"
 )
 
-// API provides HTTP endpoints for Evmon
 type API struct {
-	store Store
+	store *DBStore
 }
 
-// NewAPI creates a new API instance
-func NewAPI(store Store) *API {
+func NewAPI(store *DBStore) *API {
 	return &API{store: store}
 }
 
-// RegisterRoutes registers HTTP handlers on the given mux
 func (api *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/status", api.handleStatus)
 	mux.HandleFunc("/history", api.handleHistory)
 }
 
-// handleStatus returns the current status of all services
 func (api *API) handleStatus(w http.ResponseWriter, r *http.Request) {
-	// For simplicity, fetch all services and their current status
-	// You might want to optimize this later with a dedicated query
-
 	type ServiceStatus struct {
 		ServiceID string `json:"service_id"`
 		Status    Status `json:"status"`
 	}
 
-	// Placeholder: assuming store has a way to list all services
-	// For MVP, you can hardcode or extend Store interface with ListServices
-	services := []Service{} // TODO: replace with store.ListServices()
+	services, err := api.store.ListServices()
+	if err != nil {
+		http.Error(w, "error listing services: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	var results []ServiceStatus
 	for _, svc := range services {
 		status, err := api.store.GetCurrentStatus(svc.ID)
-		if err != nil {
-			// If unknown, skip for now
-			continue
+		if err != nil && err != sql.ErrNoRows {
+			http.Error(w, "error fetching status: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err == sql.ErrNoRows {
+			status = ""
 		}
 		results = append(results, ServiceStatus{
 			ServiceID: svc.ID,
@@ -54,7 +52,6 @@ func (api *API) handleStatus(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(results)
 }
 
-// handleHistory returns events for a given service ID and optional time window
 func (api *API) handleHistory(w http.ResponseWriter, r *http.Request) {
 	serviceID := r.URL.Query().Get("service_id")
 	if serviceID == "" {
@@ -67,6 +64,40 @@ func (api *API) handleHistory(w http.ResponseWriter, r *http.Request) {
 
 	var from, to time.Time
 	var err error
+
+	if fromStr == "" {
+		from = time.Now().Add(-24 * time.Hour)
+	} else {
+		from, err = time.Parse(time.RFC3339, fromStr)
+		if err != nil {
+			http.Error(w, "invalid from timestamp", http.StatusBadRequest)
+			return
+		}
+	}
+
+	if toStr == "" {
+		to = time.Now()
+	} else {
+		to, err = time.Parse(time.RFC3339, toStr)
+		if err != nil {
+			http.Error(w, "invalid to timestamp", http.StatusBadRequest)
+			return
+		}
+	}
+
+	events, err := api.store.GetEventsInRange(serviceID, from, to)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			events = []Event{}
+		} else {
+			http.Error(w, "error fetching events: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(events)
+}	var err error
 
 	if fromStr == "" {
 		from = time.Now().Add(-24 * time.Hour)
