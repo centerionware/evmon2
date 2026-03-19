@@ -3,6 +3,8 @@ resources:
   - rbac.yaml
   - crd.yaml
   - service.yaml
+  - pvc.yaml
+
 images:
   - name: ghcr.io/centerionware/evmon
     newTag: latest
