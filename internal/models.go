@@ -33,9 +33,11 @@ type Target struct {
 	Interval  time.Duration `json:"interval_seconds"` // optional probe interval, 0 = default
 }
 
-// Store defines the interface for persisting and querying probe events
+// Store defines the interface used by the prober and API
 type Store interface {
 	InsertEventIfChanged(serviceID string, status Status) error
+	GetOrCreateService(name string) (*Service, error)
+	ListServices() ([]Service, error)
 	GetCurrentStatus(serviceID string) (Status, error)
 	GetEventsInRange(serviceID string, from, to time.Time) ([]Event, error)
 }
