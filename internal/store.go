@@ -7,15 +7,6 @@ import (
 	"time"
 )
 
-// Store defines the interface for database operations
-type Store interface {
-	GetOrCreateService(name string) (*Service, error)
-	InsertEventIfChanged(serviceID string, status Status) error
-	GetCurrentStatus(serviceID string) (Status, error)
-	GetEventsInRange(serviceID string, from, to time.Time) ([]Event, error)
-	Close() error
-}
-
 // DBStore is a generic SQL-backed store
 type DBStore struct {
 	db *sql.DB
@@ -58,15 +49,16 @@ func (s *DBStore) InsertEventIfChanged(serviceID string, status Status) error {
 		return nil // no change
 	}
 
+	now := time.Now()
 	_, err = s.db.Exec("INSERT INTO events(service_id, status, timestamp) VALUES($1,$2,$3)",
-		serviceID, status, time.Now())
+		serviceID, status, now)
 	if err != nil {
 		return err
 	}
 
 	_, err = s.db.Exec("INSERT INTO current_status(service_id, status, last_changed_at) "+
 		"VALUES($1,$2,$3) ON CONFLICT(service_id) DO UPDATE SET status=$2, last_changed_at=$3",
-		serviceID, status, time.Now())
+		serviceID, status, now)
 	return err
 }
 
