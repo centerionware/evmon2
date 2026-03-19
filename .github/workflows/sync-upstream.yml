@@ -1,0 +1,36 @@
+name: Sync from Upstream
+
+on:
+  workflow_dispatch: # manually triggered
+
+jobs:
+  sync-upstream:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout GitHub repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # fetch all history
+
+      - name: Configure git
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://git.centerionware.com/0xdeadc0de/evmon.git
+          git fetch upstream
+
+      - name: Reset to upstream master/main
+        run: |
+          # Detect default branch from upstream
+          UPSTREAM_BRANCH=$(git remote show upstream | grep 'HEAD branch' | awk '{print $NF}')
+          echo "Upstream branch: $UPSTREAM_BRANCH"
+
+          # Reset current branch to upstream
+          git checkout -B $UPSTREAM_BRANCH upstream/$UPSTREAM_BRANCH
+          git push origin $UPSTREAM_BRANCH --force
+
+      - name: Success message
+        run: echo "Repository synced from upstream."
