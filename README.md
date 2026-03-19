@@ -109,7 +109,7 @@ Evmon leverages Kubernetes RBAC to limit access and ensure security.
 
 ## Contributing
 
-- Current status: in active custompment.  
+- Current status: in active development.  
 - Production deployment, PostgreSQL, and MariaDB support are untested.  
 - Please open an issue if you test any of the production setups or databases.  
 
