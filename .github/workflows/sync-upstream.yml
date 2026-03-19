@@ -1,42 +1,53 @@
 name: Sync from Upstream
 
+# Trigger manually
 on:
   workflow_dispatch:
+
+# Explicit permissions
+permissions:
+  contents: write       # allow pushing branches and files
+  workflows: write      # allow updating workflow files
 
 jobs:
   sync-upstream:
     runs-on: ubuntu-latest
 
     steps:
+      # Checkout the repository
       - name: Checkout GitHub repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      # Configure git user
       - name: Configure Git
         run: |
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
 
-      - name: Add upstream remote and fetch
+      # Add upstream remote and fetch
+      - name: Add upstream remote
         run: |
           git remote add upstream https://git.centerionware.com/0xdeadc0de/evmon.git
           git fetch upstream
 
+      # Create branch from upstream and push
       - name: Create PR branch with upstream changes
         run: |
           UPSTREAM_BRANCH=$(git remote show upstream | grep 'HEAD branch' | awk '{print $NF}')
           echo "Upstream default branch: $UPSTREAM_BRANCH"
 
-          # Create new branch for the PR
+          # Create new branch
           git checkout -b sync-from-upstream
 
           # Reset branch to upstream commit
           git reset --hard upstream/$UPSTREAM_BRANCH
 
-          # Push branch to GitHub
+          # Push branch to GitHub (GITHUB_TOKEN used automatically)
           git push -u origin sync-from-upstream --force
 
+      # Create a Pull Request
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v5
         with:
