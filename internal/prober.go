@@ -1,4 +1,3 @@
-```go
 // internal/prober.go
 package internal
 
@@ -132,4 +131,3 @@ func (p *Prober) probeTarget(target Target) {
 		println("error writing event:", err.Error())
 	}
 }
-```
