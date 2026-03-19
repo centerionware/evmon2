@@ -27,7 +27,15 @@ type Event struct {
 
 // Target represents an endpoint that can be probed
 type Target struct {
-	ServiceID string `json:"service_id"` // which service this target belongs to
-	URL       string `json:"url"`        // full URL for probing
-	Internal  bool   `json:"internal"`   // true = internal probe, false = external
+	ServiceID string        `json:"service_id"`       // which service this target belongs to
+	URL       string        `json:"url"`              // full URL for probing
+	Internal  bool          `json:"internal"`         // true = internal probe, false = external
+	Interval  time.Duration `json:"interval_seconds"` // optional probe interval, 0 = default
+}
+
+// Store defines the interface for persisting and querying probe events
+type Store interface {
+	InsertEventIfChanged(serviceID string, status Status) error
+	GetCurrentStatus(serviceID string) (Status, error)
+	GetEventsInRange(serviceID string, from, to time.Time) ([]Event, error)
 }
