@@ -11,4 +11,4 @@ spec:
             - name: EVMON_DB_TYPE
               value: "sqlite"
             - name: EVMON_DATABASE_URL
-              value: "file:evmon.db?_foreign_keys=on"
+              value: "file:/data/evmon.db?_foreign_keys=on&cache=shared"
