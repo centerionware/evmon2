@@ -1,3 +1,4 @@
+// internal/controller.go
 package internal
 
 import (
@@ -138,7 +139,7 @@ func (c *Controller) SyncCRDs(ctx context.Context) error {
 			ServiceID: serviceID,
 			URL:       url,
 			Internal:  false,
-			Interval:  time.Duration(interval) * time.Second, // use seconds directly
+			Interval:  time.Duration(interval) * time.Second,
 		}
 	}
 
