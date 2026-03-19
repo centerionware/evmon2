@@ -1,4 +1,3 @@
-// internal/controller.go
 package internal
 
 import (
@@ -14,15 +13,13 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-// Controller maintains the list of targets
 type Controller struct {
 	clientset *kubernetes.Clientset
 	dynClient dynamic.Interface
-	targets   map[string]Target // key = serviceID+URL
+	targets   map[string]Target
 	mu        sync.RWMutex
 }
 
-// NewController creates a new Controller
 func NewController() (*Controller, error) {
 	config, err := rest.InClusterConfig()
 	if err != nil {
@@ -46,7 +43,6 @@ func NewController() (*Controller, error) {
 	}, nil
 }
 
-// ListTargets returns the current list of targets
 func (c *Controller) ListTargets() []Target {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -58,15 +54,25 @@ func (c *Controller) ListTargets() []Target {
 	return t
 }
 
-// SyncIngresses fetches all Ingress resources and updates internal targets
+func (c *Controller) AddTarget(t Target) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	key := t.ServiceID + "|" + t.URL
+	c.targets[key] = t
+}
+
+func (c *Controller) RemoveTarget(t Target) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	key := t.ServiceID + "|" + t.URL
+	delete(c.targets, key)
+}
+
 func (c *Controller) SyncIngresses(ctx context.Context) error {
 	ingresses, err := c.clientset.NetworkingV1().Ingresses("").List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return err
 	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	for _, ing := range ingresses.Items {
 		for _, rule := range ing.Spec.Rules {
@@ -77,39 +83,37 @@ func (c *Controller) SyncIngresses(ctx context.Context) error {
 				svcName := path.Backend.Service.Name
 				var port int32
 
-                if path.Backend.Service.Port.Number != 0 {
-                    port = path.Backend.Service.Port.Number
-                } else {
-                    // 🔥 resolve named port
-                    svc, err := c.clientset.CoreV1().
-                        Services(ing.Namespace).
-                        Get(context.TODO(), svcName, metav1.GetOptions{})
-                    if err != nil {
-                        continue
-                    }
-                
-                    for _, p := range svc.Spec.Ports {
-                        if p.Name == path.Backend.Service.Port.Name {
-                            port = p.Port
-                            break
-                        }
-                    }
-                }
-                serviceID := fmt.Sprintf("%s/%s", ing.Namespace, svcName)
-                if port == 0 {
-                    println("Error: Failure to determine port for service_id:", serviceID)
-                    continue // skip invalid target
-                }
-				
-				url := fmt.Sprintf("%s.%s.svc.cluster.local:%d", svcName, ing.Namespace, port)
-				key := serviceID + url
+				if path.Backend.Service.Port.Number != 0 {
+					port = path.Backend.Service.Port.Number
+				} else {
+					svc, err := c.clientset.CoreV1().
+						Services(ing.Namespace).
+						Get(context.TODO(), svcName, metav1.GetOptions{})
+					if err != nil {
+						continue
+					}
 
-				c.targets[key] = Target{
+					for _, p := range svc.Spec.Ports {
+						if p.Name == path.Backend.Service.Port.Name {
+							port = p.Port
+							break
+						}
+					}
+				}
+
+				if port == 0 {
+					continue
+				}
+
+				serviceID := fmt.Sprintf("%s/%s", ing.Namespace, svcName)
+				url := fmt.Sprintf("%s.%s.svc.cluster.local:%d", svcName, ing.Namespace, port)
+
+				c.AddTarget(Target{
 					ServiceID: serviceID,
 					URL:       url,
 					Internal:  true,
-					Interval:  30 * time.Second, // internal endpoints always 30s
-				}
+					Interval:  30 * time.Second,
+				})
 			}
 		}
 	}
@@ -117,7 +121,6 @@ func (c *Controller) SyncIngresses(ctx context.Context) error {
 	return nil
 }
 
-// SyncCRDs fetches all EvmonEndpoint CRDs for external monitoring
 func (c *Controller) SyncCRDs(ctx context.Context) error {
 	evmonGVR := schema.GroupVersionResource{
 		Group:    "evmon.centerionware.com",
@@ -129,9 +132,6 @@ func (c *Controller) SyncCRDs(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	for _, obj := range crds.Items {
 		spec, ok := obj.Object["spec"].(map[string]interface{})
@@ -149,20 +149,19 @@ func (c *Controller) SyncCRDs(ctx context.Context) error {
 			serviceID = obj.GetName()
 		}
 
-		interval := 300 // seconds default
+		interval := 300
 		if val, ok := spec["intervalSeconds"].(int64); ok && val > 0 {
 			interval = int(val)
 		} else if valf, ok := spec["intervalSeconds"].(float64); ok && valf > 0 {
 			interval = int(valf)
 		}
 
-		key := serviceID + url
-		c.targets[key] = Target{
+		c.AddTarget(Target{
 			ServiceID: serviceID,
 			URL:       url,
 			Internal:  false,
 			Interval:  time.Duration(interval) * time.Second,
-		}
+		})
 	}
 
 	return nil
