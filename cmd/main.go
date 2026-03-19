@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+    "fmt"
 
 	_ "modernc.org/sqlite"
 	_ "github.com/lib/pq"
