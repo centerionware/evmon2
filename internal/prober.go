@@ -1,8 +1,7 @@
-// internal/prober.go
 package internal
 
 import (
-    "crypto/tls"
+	"crypto/tls"
 	"net/http"
 	"strings"
 	"sync"
@@ -28,15 +27,15 @@ func NewProber(store Store, controller *Controller) *Prober {
 		store:      store,
 		controller: controller,
 		httpClient: &http.Client{
-            Timeout: 5 * time.Second,
-            Transport: &http.Transport{
-                TLSClientConfig: &tls.Config{
-                    InsecureSkipVerify: true,
-                },
-            },
-        },
-		stopCh:     make(chan struct{}),
-		running:    make(map[string]struct{}),
+			Timeout: 5 * time.Second,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: true,
+				},
+			},
+		},
+		stopCh:  make(chan struct{}),
+		running: make(map[string]struct{}),
 	}
 }
 
@@ -64,7 +63,7 @@ func (p *Prober) Stop() {
 	p.wg.Wait()
 }
 
-// refreshTargets starts probe loops for new targets only
+// refreshTargets starts probe loops for new targets only and triggers first probe immediately
 func (p *Prober) refreshTargets() {
 	targets := p.controller.ListTargets()
 
@@ -80,14 +79,16 @@ func (p *Prober) refreshTargets() {
 		p.mu.Unlock()
 
 		p.wg.Add(1)
-		go p.probeLoop(t, key)
+		go func(target Target, key string) {
+			defer p.wg.Done()
+			p.probeTarget(target) // immediate probe for new targets
+			p.probeLoop(target, key)
+		}(t, key)
 	}
 }
 
 // probeLoop probes a single target repeatedly
 func (p *Prober) probeLoop(target Target, key string) {
-	defer p.wg.Done()
-
 	interval := target.Interval
 	if interval <= 0 {
 		if target.Internal {
@@ -119,7 +120,6 @@ func (p *Prober) probeOnce(url string) (bool, error) {
 
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
-		// fallback to GET
 		req, err = http.NewRequest("GET", url, nil)
 		if err != nil {
 			return false, err
@@ -137,7 +137,6 @@ func (p *Prober) probeOnce(url string) (bool, error) {
 
 // probeTarget performs a single probe and updates the store
 func (p *Prober) probeTarget(target Target) {
-	// Ensure service exists
 	_, err := p.store.GetOrCreateService(target.ServiceID)
 	if err != nil {
 		println("error creating service:", err.Error())
@@ -146,14 +145,11 @@ func (p *Prober) probeTarget(target Target) {
 
 	status := StatusDown
 	raw := target.URL
-
 	var urlsToTry []string
 
-	// If scheme already present, just use it
 	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
 		urlsToTry = []string{raw}
 	} else {
-		// Try HTTP first, then HTTPS
 		urlsToTry = []string{
 			"http://" + raw,
 			"https://" + raw,
@@ -162,16 +158,14 @@ func (p *Prober) probeTarget(target Target) {
 
 	for _, url := range urlsToTry {
 		println("probing:", target.ServiceID, url)
-
-        ok, err := p.probeOnce(url)
-        
-        if err != nil {
-        	println("probe error:", err.Error())
-        } else if ok {
-        	println("probe SUCCESS:", target.ServiceID)
-        } else {
-        	println("probe FAILED:", target.ServiceID)
-        }
+		ok, err := p.probeOnce(url)
+		if err != nil {
+			println("probe error:", err.Error())
+		} else if ok {
+			println("probe SUCCESS:", target.ServiceID)
+		} else {
+			println("probe FAILED:", target.ServiceID)
+		}
 		if err == nil && ok {
 			status = StatusUp
 			break
