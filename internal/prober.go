@@ -3,6 +3,7 @@ package internal
 
 import (
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -17,7 +18,7 @@ type Prober struct {
 	stopCh chan struct{}
 
 	mu      sync.Mutex
-	running map[string]struct{} // tracks active probe loops
+	running map[string]struct{}
 }
 
 // NewProber creates a new Prober
@@ -35,7 +36,6 @@ func NewProber(store Store, controller *Controller) *Prober {
 func (p *Prober) Start() {
 	p.refreshTargets()
 
-	// periodically refresh targets
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
@@ -56,7 +56,7 @@ func (p *Prober) Stop() {
 	p.wg.Wait()
 }
 
-// refreshTargets starts probe loops for any new targets discovered
+// refreshTargets starts probe loops for new targets only
 func (p *Prober) refreshTargets() {
 	targets := p.controller.ListTargets()
 
@@ -66,7 +66,7 @@ func (p *Prober) refreshTargets() {
 		p.mu.Lock()
 		if _, exists := p.running[key]; exists {
 			p.mu.Unlock()
-			continue // already probing this target
+			continue
 		}
 		p.running[key] = struct{}{}
 		p.mu.Unlock()
@@ -76,7 +76,7 @@ func (p *Prober) refreshTargets() {
 	}
 }
 
-// probeLoop probes a single target at the interval defined by the controller
+// probeLoop probes a single target repeatedly
 func (p *Prober) probeLoop(target Target, key string) {
 	defer p.wg.Done()
 
@@ -102,9 +102,34 @@ func (p *Prober) probeLoop(target Target, key string) {
 	}
 }
 
+// probeOnce performs a single HTTP request
+func (p *Prober) probeOnce(url string) (bool, error) {
+	req, err := http.NewRequest("HEAD", url, nil)
+	if err != nil {
+		return false, err
+	}
+
+	resp, err := p.httpClient.Do(req)
+	if err != nil {
+		// fallback to GET
+		req, err = http.NewRequest("GET", url, nil)
+		if err != nil {
+			return false, err
+		}
+		resp, err = p.httpClient.Do(req)
+		if err != nil {
+			return false, err
+		}
+	}
+
+	defer resp.Body.Close()
+
+	return resp.StatusCode >= 200 && resp.StatusCode < 400, nil
+}
+
 // probeTarget performs a single probe and updates the store
 func (p *Prober) probeTarget(target Target) {
-	// ✅ Ensure service exists
+	// Ensure service exists
 	_, err := p.store.GetOrCreateService(target.ServiceID)
 	if err != nil {
 		println("error creating service:", err.Error())
@@ -112,18 +137,27 @@ func (p *Prober) probeTarget(target Target) {
 	}
 
 	status := StatusDown
+	raw := target.URL
 
-	req, err := http.NewRequest("HEAD", target.URL, nil)
-	if err != nil {
-		req, _ = http.NewRequest("GET", target.URL, nil)
+	var urlsToTry []string
+
+	// If scheme already present, just use it
+	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
+		urlsToTry = []string{raw}
+	} else {
+		// Try HTTP first, then HTTPS
+		urlsToTry = []string{
+			"http://" + raw,
+			"https://" + raw,
+		}
 	}
 
-	resp, err := p.httpClient.Do(req)
-	if err == nil && resp.StatusCode >= 200 && resp.StatusCode < 400 {
-		status = StatusUp
-	}
-	if resp != nil {
-		resp.Body.Close()
+	for _, url := range urlsToTry {
+		ok, err := p.probeOnce(url)
+		if err == nil && ok {
+			status = StatusUp
+			break
+		}
 	}
 
 	err = p.store.InsertEventIfChanged(target.ServiceID, status)
