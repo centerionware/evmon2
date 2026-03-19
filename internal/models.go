@@ -40,4 +40,5 @@ type Store interface {
 	ListServices() ([]Service, error)
 	GetCurrentStatus(serviceID string) (Status, error)
 	GetEventsInRange(serviceID string, from, to time.Time) ([]Event, error)
+    DeleteService(serviceID string) error
 }
