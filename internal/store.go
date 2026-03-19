@@ -55,6 +55,24 @@ func (s *DBStore) Migrate() error {
 	return nil
 }
 
+func (s *DBStore) ListServices() ([]Service, error) {
+	rows, err := s.db.Query("SELECT id, name, first_seen FROM services ORDER BY name ASC")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var services []Service
+	for rows.Next() {
+		var svc Service
+		if err := rows.Scan(&svc.ID, &svc.Name, &svc.FirstSeen); err != nil {
+			return nil, err
+		}
+		services = append(services, svc)
+	}
+	return services, nil
+}
+
 func (s *DBStore) GetOrCreateService(name string) (*Service, error) {
 	var svc Service
 
