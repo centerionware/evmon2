@@ -12,18 +12,21 @@ spec:
       labels:
         app: evmon
     spec:
-      serviceAccountName: evmon  # use the ServiceAccount defined in RBAC
+      serviceAccountName: evmon
       containers:
         - name: evmon
           image: ghcr.io/centerionware/evmon:latest
           imagePullPolicy: IfNotPresent
           env:
             - name: EVMON_DB_TYPE
-              value: "sqlite" # default, can be overridden by overlays
+              value: "sqlite"
             - name: EVMON_DATABASE_URL
-              value: "file:evmon.db?_foreign_keys=on"
+              value: "file:/data/evmon.db?_foreign_keys=on&cache=shared"
           ports:
             - containerPort: 8080
+          volumeMounts:
+            - name: evmon-data
+              mountPath: /data
           readinessProbe:
             httpGet:
               path: /health
@@ -36,3 +39,7 @@ spec:
               port: 8080
             initialDelaySeconds: 10
             periodSeconds: 30
+      volumes:
+        - name: evmon-data
+          persistentVolumeClaim:
+            claimName: evmon-pvc
