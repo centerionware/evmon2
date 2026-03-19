@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
@@ -126,7 +125,7 @@ func (c *Controller) SyncCRDs(ctx context.Context) error {
 			serviceID = obj.GetName()
 		}
 
-		interval := 300 // default 5 minutes
+		interval := 300 // seconds default
 		if val, ok := spec["intervalSeconds"].(int64); ok && val > 0 {
 			interval = int(val)
 		} else if valf, ok := spec["intervalSeconds"].(float64); ok && valf > 0 {
