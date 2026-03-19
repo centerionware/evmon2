@@ -1,32 +1,35 @@
 apiVersion: v1
+kind: Namespace
+metadata:
+  name: evmon
+---
+apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: evmon
-  namespace: default
+  namespace: evmon
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
+kind: ClusterRole
 metadata:
-  name: evmon-role
-  namespace: default
+  name: evmon-cluster-role
 rules:
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses"]
     verbs: ["get", "list", "watch"]
-  - apiGroups: ["monitor.evmon.io"]
-    resources: ["endpoints"]
+  - apiGroups: ["evmon.centerionware.com"]
+    resources: ["evmonendpoints"]
     verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
+kind: ClusterRoleBinding
 metadata:
-  name: evmon-rolebinding
-  namespace: default
+  name: evmon-cluster-role-binding
 subjects:
   - kind: ServiceAccount
     name: evmon
-    namespace: default
+    namespace: evmon
 roleRef:
-  kind: Role
-  name: evmon-role
+  kind: ClusterRole
+  name: evmon-cluster-role
   apiGroup: rbac.authorization.k8s.io
