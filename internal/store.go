@@ -8,14 +8,6 @@ import (
 	"time"
 )
 
-// Store defines the interface used by the prober and API
-type Store interface {
-	InsertEventIfChanged(serviceID string, status Status) error
-	GetOrCreateService(name string) (*Service, error)
-	ListServices() ([]Service, error)
-	GetCurrentStatus(serviceID string) (Status, error)
-	GetEventsInRange(serviceID string, from, to time.Time) ([]Event, error)
-}
 
 // DBStore is a SQL-backed implementation of Store
 type DBStore struct {
