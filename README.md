@@ -25,7 +25,7 @@ metadata:
   namespace: evmon
 spec:
   interval: 5m0s
-  path: ./kubernetes/overlays/dev
+  path: ./kubernetes/overlays/dev/kustomization.yaml
   prune: true
   sourceRef:
     kind: GitRepository
