@@ -1,4 +1,3 @@
-// internal/prober.go
 package internal
 
 import (
@@ -21,6 +20,7 @@ type Target struct {
 	ServiceID int
 	URL       string
 	Internal  bool
+	Interval  time.Duration // probe interval for this target
 }
 
 // Store is an interface for writing probe events
@@ -105,13 +105,18 @@ func (p *Prober) refreshTargets() {
 	}
 }
 
-// probeLoop probes a single target at the appropriate interval
+// probeLoop probes a single target at the interval defined by the controller
 func (p *Prober) probeLoop(target Target) {
 	defer p.wg.Done()
 
-	interval := 30 * time.Second
-	if !target.Internal {
-		interval = 5 * time.Minute
+	interval := target.Interval
+	if interval <= 0 {
+		// fallback if controller didn't set an interval
+		if target.Internal {
+			interval = 30 * time.Second
+		} else {
+			interval = 5 * time.Minute
+		}
 	}
 
 	ticker := time.NewTicker(interval)
