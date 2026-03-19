@@ -10,31 +10,31 @@ jobs:
       - name: Checkout GitHub repo
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # get full history
+          fetch-depth: 0
 
       - name: Configure Git
         run: |
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
 
-      - name: Add upstream remote and fetch
+      - name: Add upstream remote
         run: |
           git remote add upstream https://git.centerionware.com/0xdeadc0de/evmon.git
-          git fetch upstream --tags
+          git fetch upstream
 
-      - name: Sync upstream changes
+      - name: Overwrite GitHub main with upstream
         run: |
           UPSTREAM_BRANCH=$(git remote show upstream | grep 'HEAD branch' | awk '{print $NF}')
-          echo "Upstream branch: $UPSTREAM_BRANCH"
+          echo "Upstream default branch: $UPSTREAM_BRANCH"
 
-          # Checkout GitHub main
+          # Checkout GitHub main branch
           git checkout main
 
-          # Hard reset to GitHub origin/main first to ensure clean state
-          git reset --hard origin/main
+          # Hard reset local main to upstream/main (overwrite everything)
+          git reset --hard upstream/$UPSTREAM_BRANCH
 
-          # Pull upstream changes into local branch, favor upstream in conflicts
-          git pull upstream $UPSTREAM_BRANCH --allow-unrelated-histories -X theirs
+          # Push to GitHub main, force update
+          git push origin main --force
 
-          # Push changes to GitHub main
-          git push origin main
+      - name: Done
+        run: echo "GitHub main branch overwritten with upstream."
