@@ -3,11 +3,16 @@
 A kubernetes native cluster aware event monitoring suite. Think uptime Kuma for kubernetes. 
 
 ```yml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: evmon
+---
 apiVersion: source.toolkit.fluxcd.io/v1
 kind: GitRepository
 metadata:
   name: evmon-repo
-  namespace: flux-system
+  namespace: evmon
 spec:
   interval: 1m0s
   url: https://github.com/centerionware/evmon
@@ -17,7 +22,7 @@ apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
 metadata:
   name: evmon-dev
-  namespace: flux-system
+  namespace: evmon
 spec:
   interval: 5m0s
   path: ./kubernetes/overlays/dev
