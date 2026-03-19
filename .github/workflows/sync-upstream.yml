@@ -1,8 +1,7 @@
-# .github/workflows/sync-upstream.yml
 name: Sync from Upstream
 
 on:
-  workflow_dispatch: # manually trigger
+  workflow_dispatch:
 
 jobs:
   sync-upstream:
@@ -13,7 +12,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }} # ensures push access
 
       - name: Configure Git
         run: |
@@ -26,19 +24,17 @@ jobs:
           git fetch upstream
 
       - name: Overwrite GitHub main with upstream
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Determine upstream default branch
           UPSTREAM_BRANCH=$(git remote show upstream | grep 'HEAD branch' | awk '{print $NF}')
           echo "Upstream default branch: $UPSTREAM_BRANCH"
 
-          # Checkout GitHub main branch
           git checkout main
-
-          # Reset local main to upstream commit (overwrite local)
           git reset --hard upstream/$UPSTREAM_BRANCH
 
-          # Force push to GitHub main
-          git push origin main --force
+          # Push using the Actions token to avoid 403
+          git push https://x-access-token:${GITHUB_TOKEN}@github.com/centerionware/evmon.git main --force
 
       - name: Done
         run: echo "GitHub main branch successfully overwritten with upstream."
