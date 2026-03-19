@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	_ "modernc.org/sqlite"
 	_ "github.com/lib/pq"
@@ -19,15 +18,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
+	"k8s.io/client-go/tools/cache"
 
 	networkingv1 "k8s.io/api/networking/v1"
+	"k8s.io/client-go/rest"
 )
 
 func main() {
@@ -50,11 +48,9 @@ func main() {
 	default:
 		log.Fatalf("unsupported EVMON_DB_TYPE: %s", dbType)
 	}
-
 	if err != nil {
 		log.Fatalf("failed to open database: %v", err)
 	}
-
 	defer db.Close()
 
 	store := internal.NewDBStore(db, dbType)
@@ -67,14 +63,22 @@ func main() {
 		log.Fatalf("failed to create controller: %v", err)
 	}
 
-	// --- Kubernetes clients ---
+	// Kubernetes clients
 	config, err := rest.InClusterConfig()
 	if err != nil {
 		log.Fatalf("failed to get cluster config: %v", err)
 	}
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		log.Fatalf("failed to create clientset: %v", err)
+	}
+	dynClient, err := dynamic.NewForConfig(config)
+	if err != nil {
+		log.Fatalf("failed to create dynamic client: %v", err)
+	}
 
-	clientset, _ := kubernetes.NewForConfig(config)
-	dynClient, _ := dynamic.NewForConfig(config)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	// --- Ingress informer ---
 	factory := informers.NewSharedInformerFactory(clientset, 0)
@@ -83,23 +87,19 @@ func main() {
 	ingInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			ing := obj.(*networkingv1.Ingress)
-
-			targets := controller.ExtractIngress(ing)
-
-			for _, t := range targets {
-				if _, err := store.GetOrCreateService(t.ServiceID); err != nil {
-					log.Printf("failed to create service: %v", err)
+			serviceIDs := extractIngressServiceIDs(ing)
+			for _, id := range serviceIDs {
+				if _, err := store.GetOrCreateService(id); err != nil {
+					log.Printf("failed to create service from ingress: %v", err)
 				}
 			}
 		},
 		DeleteFunc: func(obj interface{}) {
 			ing := obj.(*networkingv1.Ingress)
-
-			ids := controller.ExtractIngressServiceIDs(ing)
-
-			for _, id := range ids {
+			serviceIDs := extractIngressServiceIDs(ing)
+			for _, id := range serviceIDs {
 				if err := store.DeleteService(id); err != nil {
-					log.Printf("failed to delete service: %v", err)
+					log.Printf("failed to delete service from ingress: %v", err)
 				}
 			}
 		},
@@ -120,24 +120,27 @@ func main() {
 		cache.Indexers{},
 		nil,
 	)
+	crdInformerInf := crdInformer.Informer() // Important: get underlying informer
 
-	crdInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	crdInformerInf.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			u := obj.(*unstructured.Unstructured)
-
 			serviceID, _, _ := unstructured.NestedString(u.Object, "spec", "serviceID")
-
+			if serviceID == "" {
+				return
+			}
 			if _, err := store.GetOrCreateService(serviceID); err != nil {
-				log.Printf("failed to create service: %v", err)
+				log.Printf("failed to create service from CRD: %v", err)
 			}
 		},
 		DeleteFunc: func(obj interface{}) {
 			u := obj.(*unstructured.Unstructured)
-
 			serviceID, _, _ := unstructured.NestedString(u.Object, "spec", "serviceID")
-
+			if serviceID == "" {
+				return
+			}
 			if err := store.DeleteService(serviceID); err != nil {
-				log.Printf("failed to delete service: %v", err)
+				log.Printf("failed to delete service from CRD: %v", err)
 			}
 		},
 	})
@@ -146,9 +149,9 @@ func main() {
 	defer close(stopCh)
 
 	go ingInformer.Run(stopCh)
-	go crdInformer.Run(stopCh)
+	go crdInformerInf.Run(stopCh)
 
-	if !cache.WaitForCacheSync(stopCh, ingInformer.HasSynced, crdInformer.HasSynced) {
+	if !cache.WaitForCacheSync(stopCh, ingInformer.HasSynced, crdInformerInf.HasSynced) {
 		log.Fatal("failed to sync caches")
 	}
 
@@ -162,6 +165,11 @@ func main() {
 	mux := http.NewServeMux()
 	api.RegisterRoutes(mux)
 
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
+
 	server := &http.Server{
 		Addr:    ":8080",
 		Handler: mux,
@@ -174,5 +182,16 @@ func main() {
 
 	<-stopSig
 	log.Println("shutting down...")
-	server.Shutdown(context.Background())
+	server.Shutdown(ctx)
+}
+
+// --- helper to extract service IDs from an ingress ---
+func extractIngressServiceIDs(ing *networkingv1.Ingress) []string {
+	var ids []string
+	for _, rule := range ing.Spec.Rules {
+		if rule.Host != "" {
+			ids = append(ids, rule.Host)
+		}
+	}
+	return ids
 }
