@@ -1,0 +1,15 @@
+# Ignore Git metadata from upstream copies
+.git/
+.gitignore
+
+# Ignore OS or editor files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Ignore temporary build or cache directories
+tmp/
+build/
+dist/
+*.log
