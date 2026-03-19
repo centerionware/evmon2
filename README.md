@@ -16,7 +16,7 @@ metadata:
 spec:
   interval: 1m0s
   url: https://github.com/centerionware/evmon.git
-  reference:
+  ref:
     branch: main
 ---
 apiVersion: kustomize.toolkit.fluxcd.io/v1
