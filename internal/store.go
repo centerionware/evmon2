@@ -3,15 +3,46 @@ package internal
 import (
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 )
 
 type DBStore struct {
-	db *sql.DB
+	db          *sql.DB
+	placeholder func(int) string
 }
 
 func NewDBStore(db *sql.DB) *DBStore {
-	return &DBStore{db: db}
+	driver := detectDriver(db)
+
+	var placeholder func(int) string
+	switch driver {
+	case "postgres":
+		placeholder = func(i int) string { return "$" + itoa(i) }
+	default:
+		placeholder = func(i int) string { return "?" }
+	}
+
+	return &DBStore{
+		db:          db,
+		placeholder: placeholder,
+	}
+}
+
+func detectDriver(db *sql.DB) string {
+	t := strings.ToLower(strings.TrimSpace(db.Driver().(*sql.DB).Driver().Name()))
+	if strings.Contains(t, "postgres") {
+		return "postgres"
+	}
+	return "other"
+}
+
+func itoa(i int) string {
+	return strings.TrimPrefix(strings.TrimSpace(strings.ReplaceAll(strings.Trim(strings.ReplaceAll(strings.TrimSpace(strings.Repeat("0123456789", i)), " ", ""), " ", ""), " ", "")), "")
+}
+
+func (s *DBStore) ph(n int) string {
+	return s.placeholder(n)
 }
 
 func (s *DBStore) Migrate() error {
@@ -44,14 +75,19 @@ func (s *DBStore) Migrate() error {
 
 func (s *DBStore) GetOrCreateService(name string) (*Service, error) {
 	var svc Service
-	err := s.db.QueryRow("SELECT id, name, first_seen FROM services WHERE name=$1", name).
-		Scan(&svc.ID, &svc.Name, &svc.FirstSeen)
+
+	query := "SELECT id, name, first_seen FROM services WHERE name=" + s.ph(1)
+	err := s.db.QueryRow(query, name).Scan(&svc.ID, &svc.Name, &svc.FirstSeen)
+
 	if err == sql.ErrNoRows {
 		svc.ID = name
 		svc.Name = name
 		svc.FirstSeen = time.Now()
-		_, err := s.db.Exec("INSERT INTO services(id, name, first_seen) VALUES($1,$2,$3)",
-			svc.ID, svc.Name, svc.FirstSeen)
+
+		insert := "INSERT INTO services(id, name, first_seen) VALUES(" +
+			s.ph(1) + "," + s.ph(2) + "," + s.ph(3) + ")"
+
+		_, err := s.db.Exec(insert, svc.ID, svc.Name, svc.FirstSeen)
 		if err != nil {
 			return nil, err
 		}
@@ -59,6 +95,7 @@ func (s *DBStore) GetOrCreateService(name string) (*Service, error) {
 	} else if err != nil {
 		return nil, err
 	}
+
 	return &svc, nil
 }
 
@@ -67,35 +104,46 @@ func (s *DBStore) InsertEventIfChanged(serviceID string, status Status) error {
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
+
 	if current == status {
 		return nil
 	}
 
-	_, err = s.db.Exec("INSERT INTO events(service_id, status, timestamp) VALUES($1,$2,$3)",
-		serviceID, status, time.Now())
+	insertEvent := "INSERT INTO events(service_id, status, timestamp) VALUES(" +
+		s.ph(1) + "," + s.ph(2) + "," + s.ph(3) + ")"
+
+	_, err = s.db.Exec(insertEvent, serviceID, status, time.Now())
 	if err != nil {
 		return err
 	}
 
-	_, err = s.db.Exec("INSERT INTO current_status(service_id, status, last_changed_at) "+
-		"VALUES($1,$2,$3) ON CONFLICT(service_id) DO UPDATE SET status=$2, last_changed_at=$3",
-		serviceID, status, time.Now())
+	upsert := "INSERT INTO current_status(service_id, status, last_changed_at) VALUES(" +
+		s.ph(1) + "," + s.ph(2) + "," + s.ph(3) + ") " +
+		"ON CONFLICT(service_id) DO UPDATE SET status=" + s.ph(2) + ", last_changed_at=" + s.ph(3)
+
+	_, err = s.db.Exec(upsert, serviceID, status, time.Now())
 	return err
 }
 
 func (s *DBStore) GetCurrentStatus(serviceID string) (Status, error) {
 	var status string
-	err := s.db.QueryRow("SELECT status FROM current_status WHERE service_id=$1", serviceID).Scan(&status)
+
+	query := "SELECT status FROM current_status WHERE service_id=" + s.ph(1)
+	err := s.db.QueryRow(query, serviceID).Scan(&status)
 	if err != nil {
 		return "", err
 	}
+
 	return Status(status), nil
 }
 
 func (s *DBStore) GetEventsInRange(serviceID string, from, to time.Time) ([]Event, error) {
-	rows, err := s.db.Query("SELECT service_id, status, timestamp FROM events "+
-		"WHERE service_id=$1 AND timestamp >= $2 AND timestamp <= $3 ORDER BY timestamp ASC",
-		serviceID, from, to)
+	query := "SELECT service_id, status, timestamp FROM events WHERE service_id=" + s.ph(1) +
+		" AND timestamp >= " + s.ph(2) +
+		" AND timestamp <= " + s.ph(3) +
+		" ORDER BY timestamp ASC"
+
+	rows, err := s.db.Query(query, serviceID, from, to)
 	if err != nil {
 		return nil, err
 	}
@@ -109,6 +157,7 @@ func (s *DBStore) GetEventsInRange(serviceID string, from, to time.Time) ([]Even
 		}
 		events = append(events, e)
 	}
+
 	return events, nil
 }
 
