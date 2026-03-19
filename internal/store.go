@@ -1,4 +1,3 @@
-// internal/store.go
 package internal
 
 import (
@@ -7,23 +6,47 @@ import (
 	"time"
 )
 
-// DBStore is a generic SQL-backed store
 type DBStore struct {
 	db *sql.DB
 }
 
-// NewDBStore creates a new DBStore from an *sql.DB
 func NewDBStore(db *sql.DB) *DBStore {
 	return &DBStore{db: db}
 }
 
-// GetOrCreateService returns the service if it exists, or creates it
+func (s *DBStore) Migrate() error {
+	statements := []string{
+		`CREATE TABLE IF NOT EXISTS services (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			first_seen TIMESTAMP NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS events (
+			service_id TEXT NOT NULL,
+			status TEXT NOT NULL,
+			timestamp TIMESTAMP NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS current_status (
+			service_id TEXT PRIMARY KEY,
+			status TEXT NOT NULL,
+			last_changed_at TIMESTAMP NOT NULL
+		);`,
+	}
+
+	for _, stmt := range statements {
+		if _, err := s.db.Exec(stmt); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (s *DBStore) GetOrCreateService(name string) (*Service, error) {
 	var svc Service
 	err := s.db.QueryRow("SELECT id, name, first_seen FROM services WHERE name=$1", name).
 		Scan(&svc.ID, &svc.Name, &svc.FirstSeen)
 	if err == sql.ErrNoRows {
-		// insert new service
 		svc.ID = name
 		svc.Name = name
 		svc.FirstSeen = time.Now()
@@ -39,7 +62,6 @@ func (s *DBStore) GetOrCreateService(name string) (*Service, error) {
 	return &svc, nil
 }
 
-// InsertEventIfChanged inserts a new event only if the status changed
 func (s *DBStore) InsertEventIfChanged(serviceID string, status Status) error {
 	current, err := s.GetCurrentStatus(serviceID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -61,7 +83,6 @@ func (s *DBStore) InsertEventIfChanged(serviceID string, status Status) error {
 	return err
 }
 
-// GetCurrentStatus fetches the current status for a service
 func (s *DBStore) GetCurrentStatus(serviceID string) (Status, error) {
 	var status string
 	err := s.db.QueryRow("SELECT status FROM current_status WHERE service_id=$1", serviceID).Scan(&status)
@@ -71,7 +92,6 @@ func (s *DBStore) GetCurrentStatus(serviceID string) (Status, error) {
 	return Status(status), nil
 }
 
-// GetEventsInRange fetches events between from and to timestamps
 func (s *DBStore) GetEventsInRange(serviceID string, from, to time.Time) ([]Event, error) {
 	rows, err := s.db.Query("SELECT service_id, status, timestamp FROM events "+
 		"WHERE service_id=$1 AND timestamp >= $2 AND timestamp <= $3 ORDER BY timestamp ASC",
@@ -92,7 +112,6 @@ func (s *DBStore) GetEventsInRange(serviceID string, from, to time.Time) ([]Even
 	return events, nil
 }
 
-// Close closes the underlying DB
 func (s *DBStore) Close() error {
 	return s.db.Close()
 }
