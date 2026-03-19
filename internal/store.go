@@ -187,6 +187,29 @@ func (s *DBStore) GetEventsInRange(serviceID string, from, to time.Time) ([]Even
 	return events, nil
 }
 
+func (s *DBStore) DeleteService(serviceID string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	queries := []string{
+		"DELETE FROM events WHERE service_id=" + s.placeholder(1),
+		"DELETE FROM current_status WHERE service_id=" + s.placeholder(1),
+		"DELETE FROM services WHERE id=" + s.placeholder(1),
+	}
+
+	for _, q := range queries {
+		if _, err := tx.Exec(q, serviceID); err != nil {
+			// swallow errors (row may not exist — that's fine)
+			continue
+		}
+	}
+
+	return tx.Commit()
+}
+
 func (s *DBStore) Close() error {
 	return s.db.Close()
 }
