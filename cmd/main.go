@@ -26,7 +26,7 @@ func main() {
 	switch dbType {
 	case "", "sqlite":
 		if dbURL == "" {
-			dbURL = "file:evmon.db?_foreign_keys=on"
+			dbURL = "file:evmon.db?_foreign_keys=on&cache=shared"
 		}
 		db, err = sql.Open("sqlite", dbURL)
 	case "postgres":
@@ -46,6 +46,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to open database: %v", err)
 	}
+
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+
 	defer db.Close()
 
 	store := internal.NewDBStore(db)
