@@ -63,7 +63,7 @@ func (p *Prober) refreshTargets() {
 	currentTargets := p.controller.ListTargets()
 	for _, t := range currentTargets {
 		// Could add logic to start new goroutine for new targets
-		// For simplicity, assume targets don’t change often for MVP
+		// For simplicity, assume targets do not change often for MVP
 	}
 }
 
