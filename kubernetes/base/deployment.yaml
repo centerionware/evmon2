@@ -12,6 +12,7 @@ spec:
       labels:
         app: evmon
     spec:
+      serviceAccountName: evmon  # use the ServiceAccount defined in RBAC
       containers:
         - name: evmon
           image: ghcr.io/centerionware/evmon:latest
