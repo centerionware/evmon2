@@ -11,4 +11,4 @@ spec:
             - name: EVMON_DB_TYPE
               value: "sqlite"
             - name: EVMON_DATABASE_URL
-              value: "file:/data/evmon.db?mode=rwc_foreign_keys=on&cache=shared"
+              value: "file:/data/evmon.db?mode=rwc&_foreign_keys=on&cache=shared"
