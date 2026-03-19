@@ -2,6 +2,7 @@
 package internal
 
 import (
+    "crypto/tls"
 	"net/http"
 	"strings"
 	"sync"
