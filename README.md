@@ -15,7 +15,7 @@ metadata:
   namespace: evmon
 spec:
   interval: 1m0s
-  url: https://github.com/centerionware/evmon
+  url: https://github.com/centerionware/evmon.git
   branch: main
 ---
 apiVersion: kustomize.toolkit.fluxcd.io/v1
