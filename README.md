@@ -109,12 +109,18 @@ Evmon leverages Kubernetes RBAC to limit access and ensure security.
 
 ## Contributing
 
-- Current status: in active development.  
+- Current status: Feature Freeze, maintainance only. PR's will be considered if they fix things or add highly valuable functionality only if they've been fully tested. 
 - Production deployment, PostgreSQL, and MariaDB support are untested.  
 - Please open an issue if you test any of the production setups or databases.  
 
 ---
 
+## Design Philosophy
+
+KISS. This is meant to be a simple backend. There will never be a builtin UI or Notification utility. Those are meant to be seperate isolated components. Once the other utilities are in place this API shouldn't be exposed to the internet, unless behind an ingress with a header key required as a password to prevent unauthorized access. This exposes the internal layout of the kubernetes cluster to a degree which may make some uncomfortable.
+
+---
+
 ## License
 
-[MIT License](LICENSE)
+[MIT LicLicens](License)
