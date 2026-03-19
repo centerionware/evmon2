@@ -10,9 +10,9 @@ jobs:
       - name: Checkout GitHub repo
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # fetch all history
+          fetch-depth: 0 # full history so we can commit
 
-      - name: Configure git
+      - name: Configure Git
         run: |
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
@@ -22,15 +22,26 @@ jobs:
           git remote add upstream https://git.centerionware.com/0xdeadc0de/evmon.git
           git fetch upstream
 
-      - name: Reset to upstream master/main
+      - name: Sync upstream changes
         run: |
-          # Detect default branch from upstream
+          # Detect upstream default branch
           UPSTREAM_BRANCH=$(git remote show upstream | grep 'HEAD branch' | awk '{print $NF}')
-          echo "Upstream branch: $UPSTREAM_BRANCH"
+          echo "Upstream default branch: $UPSTREAM_BRANCH"
 
-          # Reset current branch to upstream
-          git checkout -B $UPSTREAM_BRANCH upstream/$UPSTREAM_BRANCH
-          git push origin $UPSTREAM_BRANCH --force
+          # Checkout GitHub main branch
+          git checkout main
 
-      - name: Success message
-        run: echo "Repository synced from upstream."
+          # Pull changes from upstream, overwrite local files
+          git reset --hard upstream/$UPSTREAM_BRANCH
+
+          # Check if there are changes to commit
+          if ! git diff --quiet; then
+            git add -A
+            git commit -m "Sync from upstream $(date +'%Y-%m-%d %H:%M:%S')"
+            git push origin main
+          else
+            echo "No changes to sync from upstream."
+          fi
+
+      - name: Done
+        run: echo "GitHub main branch synced with upstream."
