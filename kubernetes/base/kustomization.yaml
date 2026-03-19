@@ -1,0 +1,14 @@
+resources:
+  - deployment.yaml
+  - rbac.yaml
+  - crd.yaml
+  - service.yaml
+images:
+  - name: ghcr.io/centerionware/evmon
+    newTag: latest
+
+# Default SQLite config for quick deployments/testing
+configMapGenerator:
+  - name: evmon-config
+    literals:
+      - DATABASE=sqlite://evmon.db
