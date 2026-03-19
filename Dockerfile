@@ -2,16 +2,13 @@
 FROM golang:1.21-alpine AS builder
 WORKDIR /app
 
-# Copy go.mod only
-COPY go.mod ./
-
-# Generate go.sum and download dependencies
-RUN go mod tidy
-
-# Copy the rest of the source code
+# Copy everything first
 COPY . .
 
-# Build the binary (normal build, not forcing static)
+# Generate go.sum and download all dependencies
+RUN go mod tidy
+
+# Build the binary
 RUN go build -o evmon ./cmd/main.go
 
 # Final stage
