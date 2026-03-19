@@ -8,6 +8,16 @@ import (
 	"time"
 )
 
+// Store defines the interface used by the prober and API
+type Store interface {
+	InsertEventIfChanged(serviceID string, status Status) error
+	GetOrCreateService(name string) (*Service, error)
+	ListServices() ([]Service, error)
+	GetCurrentStatus(serviceID string) (Status, error)
+	GetEventsInRange(serviceID string, from, to time.Time) ([]Event, error)
+}
+
+// DBStore is a SQL-backed implementation of Store
 type DBStore struct {
 	db     *sql.DB
 	dbType string
@@ -84,8 +94,10 @@ func (s *DBStore) GetOrCreateService(name string) (*Service, error) {
 		svc.Name = name
 		svc.FirstSeen = time.Now()
 
-		insert := fmt.Sprintf("INSERT INTO services(id, name, first_seen) VALUES(%s,%s,%s)",
-			s.placeholder(1), s.placeholder(2), s.placeholder(3))
+		insert := fmt.Sprintf(
+			"INSERT INTO services(id, name, first_seen) VALUES(%s,%s,%s)",
+			s.placeholder(1), s.placeholder(2), s.placeholder(3),
+		)
 
 		_, err := s.db.Exec(insert, svc.ID, svc.Name, svc.FirstSeen)
 		if err != nil {
@@ -111,8 +123,10 @@ func (s *DBStore) InsertEventIfChanged(serviceID string, status Status) error {
 
 	now := time.Now()
 
-	insertEvent := fmt.Sprintf("INSERT INTO events(service_id, status, timestamp) VALUES(%s,%s,%s)",
-		s.placeholder(1), s.placeholder(2), s.placeholder(3))
+	insertEvent := fmt.Sprintf(
+		"INSERT INTO events(service_id, status, timestamp) VALUES(%s,%s,%s)",
+		s.placeholder(1), s.placeholder(2), s.placeholder(3),
+	)
 
 	_, err = s.db.Exec(insertEvent, serviceID, status, now)
 	if err != nil {
@@ -141,7 +155,11 @@ func (s *DBStore) InsertEventIfChanged(serviceID string, status Status) error {
 func (s *DBStore) GetCurrentStatus(serviceID string) (Status, error) {
 	var status string
 
-	query := fmt.Sprintf("SELECT status FROM current_status WHERE service_id=%s", s.placeholder(1))
+	query := fmt.Sprintf(
+		"SELECT status FROM current_status WHERE service_id=%s",
+		s.placeholder(1),
+	)
+
 	err := s.db.QueryRow(query, serviceID).Scan(&status)
 	if err != nil {
 		return "", err
@@ -152,7 +170,10 @@ func (s *DBStore) GetCurrentStatus(serviceID string) (Status, error) {
 
 func (s *DBStore) GetEventsInRange(serviceID string, from, to time.Time) ([]Event, error) {
 	query := fmt.Sprintf(
-		"SELECT service_id, status, timestamp FROM events WHERE service_id=%s AND timestamp >= %s AND timestamp <= %s ORDER BY timestamp ASC",
+		`SELECT service_id, status, timestamp 
+		 FROM events 
+		 WHERE service_id=%s AND timestamp >= %s AND timestamp <= %s 
+		 ORDER BY timestamp ASC`,
 		s.placeholder(1), s.placeholder(2), s.placeholder(3),
 	)
 
