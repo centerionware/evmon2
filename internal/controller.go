@@ -75,7 +75,30 @@ func (c *Controller) SyncIngresses(ctx context.Context) error {
 			}
 			for _, path := range rule.HTTP.Paths {
 				svcName := path.Backend.Service.Name
-				port := path.Backend.Service.Port.Number
+				var port int32
+
+                if path.Backend.Service.Port.Number != 0 {
+                    port = path.Backend.Service.Port.Number
+                } else {
+                    // 🔥 resolve named port
+                    svc, err := client.CoreV1().
+                        Services(ing.Namespace).
+                        Get(context.TODO(), svcName, metav1.GetOptions{})
+                    if err != nil {
+                        continue
+                    }
+                
+                    for _, p := range svc.Spec.Ports {
+                        if p.Name == path.Backend.Service.Port.Name {
+                            port = p.Port
+                            break
+                        }
+                    }
+                }
+                
+                if port == 0 {
+                    continue // skip invalid target
+                }
 				serviceID := fmt.Sprintf("%s/%s", ing.Namespace, svcName)
 				url := fmt.Sprintf("%s.%s.svc.cluster.local:%d", svcName, ing.Namespace, port)
 				key := serviceID + url
