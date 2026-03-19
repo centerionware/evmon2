@@ -1,4 +1,3 @@
-// internal/controller.go
 package internal
 
 import (
@@ -8,16 +7,19 @@ import (
 
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
-	crdclientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
 
 // Controller maintains the list of targets
 type Controller struct {
-	clientset *kubernetes.Clientset
-	targets   map[string]Target // key = ServiceID+URL
-	mu        sync.RWMutex
+	clientset    *kubernetes.Clientset
+	dynClient    dynamic.Interface
+	targets      map[string]Target // key = serviceID+URL
+	mu           sync.RWMutex
 }
 
 // NewController creates a new Controller
@@ -32,8 +34,14 @@ func NewController() (*Controller, error) {
 		return nil, err
 	}
 
+	dc, err := dynamic.NewForConfig(config)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Controller{
 		clientset: cs,
+		dynClient: dc,
 		targets:   make(map[string]Target),
 	}, nil
 }
@@ -84,9 +92,42 @@ func (c *Controller) SyncIngresses(ctx context.Context) error {
 	return nil
 }
 
-// SyncCRDs fetches all Evmon Endpoint CRDs for external monitoring
+// SyncCRDs fetches all EvmonEndpoint CRDs for external monitoring
 func (c *Controller) SyncCRDs(ctx context.Context) error {
-	// NOTE: minimal placeholder, will need a proper CRD client
-	// Using dynamic client or codegen in the future
+	// Define the GVR for our EvmonEndpoint CRD
+	evmonGVR := schema.GroupVersionResource{
+		Group:    "evmon.centerionware.com",
+		Version:  "v1",
+		Resource: "evmonendpoints",
+	}
+
+	crds, err := c.dynClient.Resource(evmonGVR).Namespace("").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return err
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for _, obj := range crds.Items {
+		// obj is unstructured, extract fields
+		spec := obj.Object["spec"].(map[string]interface{})
+		url, ok := spec["url"].(string)
+		if !ok || url == "" {
+			continue
+		}
+		serviceID, ok := spec["serviceID"].(string)
+		if !ok || serviceID == "" {
+			serviceID = obj.GetName()
+		}
+
+		key := serviceID + url
+		c.targets[key] = Target{
+			ServiceID: serviceID,
+			URL:       url,
+			Internal:  false,
+		}
+	}
+
 	return nil
 }
