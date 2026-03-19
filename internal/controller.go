@@ -81,7 +81,7 @@ func (c *Controller) SyncIngresses(ctx context.Context) error {
                     port = path.Backend.Service.Port.Number
                 } else {
                     // 🔥 resolve named port
-                    svc, err := client.CoreV1().
+                    svc, err := c.clientset.CoreV1().
                         Services(ing.Namespace).
                         Get(context.TODO(), svcName, metav1.GetOptions{})
                     if err != nil {
