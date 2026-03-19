@@ -1,0 +1,18 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: evmon
+spec:
+  replicas: 2
+  template:
+    spec:
+      containers:
+        - name: evmon
+          env:
+            - name: EVMON_DB_TYPE
+              value: "postgres" # or "mariadb" depending on production choice
+            - name: EVMON_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: evmon-db-secret
+                  key: database_url
