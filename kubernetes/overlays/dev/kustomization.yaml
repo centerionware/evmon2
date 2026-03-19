@@ -1,0 +1,7 @@
+resources:
+  - ../../../
+
+nameSuffix: -dev
+
+patchesStrategicMerge:
+  - patch.yaml
