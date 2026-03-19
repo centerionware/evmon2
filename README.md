@@ -32,4 +32,5 @@ spec:
     kind: GitRepository
     name: evmon-repo
   validation: client
+  namespace: evmon   # <-- Ensure all resources are created in this namespace
 ```
