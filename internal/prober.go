@@ -124,7 +124,7 @@ func (p *Prober) probeOnce(url string) (bool, error) {
 
 	defer resp.Body.Close()
 
-	return resp.StatusCode >= 200 && resp.StatusCode < 400, nil
+	return resp.StatusCode < 500, nil
 }
 
 // probeTarget performs a single probe and updates the store
@@ -153,7 +153,17 @@ func (p *Prober) probeTarget(target Target) {
 	}
 
 	for _, url := range urlsToTry {
-		ok, err := p.probeOnce(url)
+		println("probing:", target.ServiceID, url)
+
+        ok, err := p.probeOnce(url)
+        
+        if err != nil {
+        	println("probe error:", err.Error())
+        } else if ok {
+        	println("probe SUCCESS:", target.ServiceID)
+        } else {
+        	println("probe FAILED:", target.ServiceID)
+        }
 		if err == nil && ok {
 			status = StatusUp
 			break
