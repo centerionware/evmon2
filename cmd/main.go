@@ -1,4 +1,3 @@
-// cmd/main.go
 package main
 
 import (
@@ -27,7 +26,7 @@ func main() {
 	switch dbType {
 	case "", "sqlite":
 		if dbURL == "" {
-			dbURL = "file:/data/evmon.db?mode=rwc&_foreign_keys=on&cache=shared"
+			dbURL = "file:/data/evmon.db?_foreign_keys=on&cache=shared"
 		}
 		db, err = sql.Open("sqlite", dbURL)
 	case "postgres":
@@ -50,19 +49,12 @@ func main() {
 
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
-
-	if err := db.Ping(); err != nil {
-		log.Fatalf("failed to connect to database: %v", err)
-	}
+	defer db.Close()
 
 	store := internal.NewDBStore(db, dbType)
-
 	if err := store.Migrate(); err != nil {
 		log.Fatalf("failed to migrate database: %v", err)
 	}
-	log.Println("database migration completed")
-
-	defer db.Close()
 
 	controller, err := internal.NewController()
 	if err != nil {
