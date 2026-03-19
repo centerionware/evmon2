@@ -91,22 +91,32 @@ func (s *DBStore) InsertEventIfChanged(serviceID string, status Status) error {
 		return nil
 	}
 
+	now := time.Now()
+
 	insertEvent := fmt.Sprintf("INSERT INTO events(service_id, status, timestamp) VALUES(%s,%s,%s)",
 		s.placeholder(1), s.placeholder(2), s.placeholder(3))
 
-	_, err = s.db.Exec(insertEvent, serviceID, status, time.Now())
+	_, err = s.db.Exec(insertEvent, serviceID, status, now)
 	if err != nil {
 		return err
 	}
 
-	upsert := fmt.Sprintf(
-		"INSERT INTO current_status(service_id, status, last_changed_at) VALUES(%s,%s,%s) "+
-			"ON CONFLICT(service_id) DO UPDATE SET status=%s, last_changed_at=%s",
-		s.placeholder(1), s.placeholder(2), s.placeholder(3),
-		s.placeholder(2), s.placeholder(3),
-	)
+	var upsert string
+	if s.dbType == "postgres" {
+		upsert = fmt.Sprintf(
+			"INSERT INTO current_status(service_id, status, last_changed_at) VALUES(%s,%s,%s) "+
+				"ON CONFLICT(service_id) DO UPDATE SET status=%s, last_changed_at=%s",
+			s.placeholder(1), s.placeholder(2), s.placeholder(3),
+			s.placeholder(2), s.placeholder(3),
+		)
+	} else {
+		upsert = fmt.Sprintf(
+			"INSERT OR REPLACE INTO current_status(service_id, status, last_changed_at) VALUES(%s,%s,%s)",
+			s.placeholder(1), s.placeholder(2), s.placeholder(3),
+		)
+	}
 
-	_, err = s.db.Exec(upsert, serviceID, status, time.Now())
+	_, err = s.db.Exec(upsert, serviceID, status, now)
 	return err
 }
 
