@@ -1,41 +1,11 @@
+// internal/prober.go
 package internal
 
 import (
-	_ "context" // imported for future use
 	"net/http"
 	"sync"
 	"time"
 )
-
-// Status represents the status of a target
-type Status string
-
-const (
-	StatusUp   Status = "up"
-	StatusDown Status = "down"
-)
-
-// Target represents a service to probe
-type Target struct {
-	ServiceID int
-	URL       string
-	Internal  bool
-	Interval  time.Duration // probe interval for this target
-}
-
-// Store is an interface for writing probe events
-type Store interface {
-	InsertEventIfChanged(serviceID int, status Status) error
-}
-
-// Controller manages the list of targets
-type Controller struct {
-	// ListTargets returns the current targets to probe
-	ListTargets func() []Target
-
-	// internal map to track which targets are already being probed
-	targetMap map[string]struct{}
-}
 
 // Prober periodically probes targets and updates the store
 type Prober struct {
@@ -48,9 +18,6 @@ type Prober struct {
 
 // NewProber creates a new Prober
 func NewProber(store Store, controller *Controller) *Prober {
-	if controller.targetMap == nil {
-		controller.targetMap = make(map[string]struct{})
-	}
 	return &Prober{
 		store:      store,
 		controller: controller,
@@ -65,7 +32,6 @@ func NewProber(store Store, controller *Controller) *Prober {
 func (p *Prober) Start() {
 	targets := p.controller.ListTargets()
 	for _, target := range targets {
-		p.controller.targetMap[target.URL] = struct{}{}
 		p.wg.Add(1)
 		go p.probeLoop(target)
 	}
@@ -94,14 +60,9 @@ func (p *Prober) Stop() {
 // refreshTargets starts probe loops for any new targets discovered
 func (p *Prober) refreshTargets() {
 	currentTargets := p.controller.ListTargets()
-
 	for _, t := range currentTargets {
-		if _, ok := p.controller.targetMap[t.URL]; !ok {
-			// New target discovered
-			p.controller.targetMap[t.URL] = struct{}{}
-			p.wg.Add(1)
-			go p.probeLoop(t)
-		}
+		p.wg.Add(1)
+		go p.probeLoop(t)
 	}
 }
 
@@ -111,7 +72,6 @@ func (p *Prober) probeLoop(target Target) {
 
 	interval := target.Interval
 	if interval <= 0 {
-		// fallback if controller didn't set an interval
 		if target.Internal {
 			interval = 30 * time.Second
 		} else {
