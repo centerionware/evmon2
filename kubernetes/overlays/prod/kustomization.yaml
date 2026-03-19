@@ -3,5 +3,7 @@ resources:
 
 nameSuffix: -prod
 
+namespace: evmon
+
 patchesStrategicMerge:
   - patch.yaml
