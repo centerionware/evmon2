@@ -16,7 +16,7 @@ spec:
       containers:
         - name: evmon
           image: ghcr.io/centerionware/evmon:latest
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           env:
             - name: EVMON_DB_TYPE
               value: "sqlite"
