@@ -2,11 +2,40 @@
 package internal
 
 import (
-	"context"
+	_ "context" // imported for future use
 	"net/http"
 	"sync"
 	"time"
 )
+
+// Status represents the status of a target
+type Status string
+
+const (
+	StatusUp   Status = "up"
+	StatusDown Status = "down"
+)
+
+// Target represents a service to probe
+type Target struct {
+	ServiceID int
+	URL       string
+	Internal  bool
+}
+
+// Store is an interface for writing probe events
+type Store interface {
+	InsertEventIfChanged(serviceID int, status Status) error
+}
+
+// Controller manages the list of targets
+type Controller struct {
+	// ListTargets returns the current targets to probe
+	ListTargets func() []Target
+
+	// internal map to track which targets are already being probed
+	targetMap map[string]struct{}
+}
 
 // Prober periodically probes targets and updates the store
 type Prober struct {
@@ -19,11 +48,14 @@ type Prober struct {
 
 // NewProber creates a new Prober
 func NewProber(store Store, controller *Controller) *Prober {
+	if controller.targetMap == nil {
+		controller.targetMap = make(map[string]struct{})
+	}
 	return &Prober{
 		store:      store,
 		controller: controller,
 		httpClient: &http.Client{
-			Timeout: 5 * time.Second, // quick fail on slow endpoints
+			Timeout: 5 * time.Second,
 		},
 		stopCh: make(chan struct{}),
 	}
@@ -33,11 +65,12 @@ func NewProber(store Store, controller *Controller) *Prober {
 func (p *Prober) Start() {
 	targets := p.controller.ListTargets()
 	for _, target := range targets {
+		p.controller.targetMap[target.URL] = struct{}{}
 		p.wg.Add(1)
 		go p.probeLoop(target)
 	}
 
-	// Optional: periodically refresh targets from controller
+	// periodically refresh targets
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
@@ -58,12 +91,17 @@ func (p *Prober) Stop() {
 	p.wg.Wait()
 }
 
-// refreshTargets adds new targets discovered by the controller
+// refreshTargets starts probe loops for any new targets discovered
 func (p *Prober) refreshTargets() {
 	currentTargets := p.controller.ListTargets()
+
 	for _, t := range currentTargets {
-		// Could add logic to start new goroutine for new targets
-		// For simplicity, assume targets do not change often for MVP
+		if _, ok := p.controller.targetMap[t.URL]; !ok {
+			// New target discovered
+			p.controller.targetMap[t.URL] = struct{}{}
+			p.wg.Add(1)
+			go p.probeLoop(t)
+		}
 	}
 }
 
@@ -95,7 +133,6 @@ func (p *Prober) probeTarget(target Target) {
 
 	req, err := http.NewRequest("HEAD", target.URL, nil)
 	if err != nil {
-		// fallback to GET if HEAD fails
 		req, _ = http.NewRequest("GET", target.URL, nil)
 	}
 
@@ -107,10 +144,8 @@ func (p *Prober) probeTarget(target Target) {
 		resp.Body.Close()
 	}
 
-	// write event only if state changed
 	err = p.store.InsertEventIfChanged(target.ServiceID, status)
 	if err != nil {
-		// log error for now (replace with proper logging later)
 		println("error writing event:", err.Error())
 	}
 }
