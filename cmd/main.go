@@ -1,3 +1,4 @@
+// cmd/main.go
 package main
 
 import (
@@ -54,7 +55,7 @@ func main() {
 		log.Fatalf("failed to connect to database: %v", err)
 	}
 
-	store := internal.NewDBStore(db)
+	store := internal.NewDBStore(db, dbType)
 
 	if err := store.Migrate(); err != nil {
 		log.Fatalf("failed to migrate database: %v", err)
