@@ -95,11 +95,12 @@ func (c *Controller) SyncIngresses(ctx context.Context) error {
                         }
                     }
                 }
-                
+                serviceID := fmt.Sprintf("%s/%s", ing.Namespace, svcName)
                 if port == 0 {
+                    println("Error: Failure to determine port for service_id:", serviceID)
                     continue // skip invalid target
                 }
-				serviceID := fmt.Sprintf("%s/%s", ing.Namespace, svcName)
+				
 				url := fmt.Sprintf("%s.%s.svc.cluster.local:%d", svcName, ing.Namespace, port)
 				key := serviceID + url
 
