@@ -3,13 +3,13 @@ package main
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
-	"fmt"
 
 	_ "modernc.org/sqlite"
 	_ "github.com/lib/pq"
@@ -18,21 +18,25 @@ import (
 	"centerionware.com/evmon/internal"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/client-go/informers"
-	"k8s.io/client-go/kubernetes"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
+	"k8s.io/client-go/informers"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 
 	networkingv1 "k8s.io/api/networking/v1"
-	"k8s.io/client-go/rest"
 )
 
 func main() {
+	log.Println("evmon starting...")
+
 	dbType := os.Getenv("EVMON_DB_TYPE")
 	dbURL := os.Getenv("EVMON_DATABASE_URL")
+
+	log.Printf("dbType=%s dbURL=%s\n", dbType, dbURL)
 
 	var db *sql.DB
 	var err error
@@ -42,10 +46,13 @@ func main() {
 		if dbURL == "" {
 			dbURL = "file:/data/evmon.db?_foreign_keys=on&cache=shared"
 		}
+		log.Println("opening sqlite database")
 		db, err = sql.Open("sqlite", dbURL)
 	case "postgres":
+		log.Println("opening postgres database")
 		db, err = sql.Open("postgres", dbURL)
 	case "mariadb":
+		log.Println("opening mariadb database")
 		db, err = sql.Open("mysql", dbURL)
 	default:
 		log.Fatalf("unsupported EVMON_DB_TYPE: %s", dbType)
@@ -53,68 +60,120 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to open database: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		log.Println("closing database")
+		db.Close()
+	}()
 
+	log.Println("running migrations")
 	store := internal.NewDBStore(db, dbType)
 	if err := store.Migrate(); err != nil {
 		log.Fatalf("failed to migrate database: %v", err)
 	}
 
+	log.Println("creating controller")
 	controller, err := internal.NewController()
 	if err != nil {
 		log.Fatalf("failed to create controller: %v", err)
 	}
 
+	log.Println("getting in-cluster config")
 	config, err := rest.InClusterConfig()
 	if err != nil {
 		log.Fatalf("failed to get cluster config: %v", err)
 	}
-	clientset, _ := kubernetes.NewForConfig(config)
-	dynClient, _ := dynamic.NewForConfig(config)
+
+	log.Println("creating kubernetes clientset")
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		log.Fatalf("failed to create clientset: %v", err)
+	}
+
+	log.Println("creating dynamic client")
+	dynClient, err := dynamic.NewForConfig(config)
+	if err != nil {
+		log.Fatalf("failed to create dynamic client: %v", err)
+	}
 
 	ctx := context.Background()
 
-	// initial sync to populate controller
-	controller.SyncIngresses(ctx)
-	controller.SyncCRDs(ctx)
+	log.Println("running initial SyncIngresses")
+	if err := controller.SyncIngresses(ctx); err != nil {
+		log.Printf("SyncIngresses error: %v", err)
+	}
 
-	// cleanup
-	existingServices, _ := store.ListServices()
+	log.Println("running initial SyncCRDs")
+	if err := controller.SyncCRDs(ctx); err != nil {
+		log.Printf("SyncCRDs error: %v", err)
+	}
+
+	log.Printf("initial targets loaded: %d\n", len(controller.ListTargets()))
+
+	log.Println("starting cleanup phase")
+	existingServices, err := store.ListServices()
+	if err != nil {
+		log.Printf("failed to list services: %v", err)
+	} else {
+		log.Printf("existing services in DB: %d\n", len(existingServices))
+	}
+
 	valid := map[string]struct{}{}
 	for _, t := range controller.ListTargets() {
 		valid[t.ServiceID] = struct{}{}
 	}
+
 	for _, svc := range existingServices {
 		if _, ok := valid[svc.ID]; !ok {
-			store.DeleteService(svc.ID)
+			log.Printf("deleting stale service: %s\n", svc.ID)
+			if err := store.DeleteService(svc.ID); err != nil {
+				log.Printf("failed to delete service %s: %v", svc.ID, err)
+			}
 		}
 	}
 
-	// informers
+	log.Println("setting up informers")
+
 	factory := informers.NewSharedInformerFactory(clientset, 0)
 	ingInformer := factory.Networking().V1().Ingresses().Informer()
 
 	ingInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
+			log.Println("Ingress ADD event")
 			ing := obj.(*networkingv1.Ingress)
 
-			for _, t := range buildInternalTargets(clientset, ing) {
+			internalTargets := buildInternalTargets(clientset, ing)
+			log.Printf("internal targets found: %d\n", len(internalTargets))
+
+			for _, t := range internalTargets {
+				log.Printf("adding internal target: %+v\n", t)
 				controller.AddTarget(t)
-				store.GetOrCreateService(t.ServiceID)
+				if _, err := store.GetOrCreateService(t.ServiceID); err != nil {
+					log.Printf("failed to create internal service: %v", err)
+				}
 			}
-			for _, t := range buildExternalTargets(ing) {
+
+			externalTargets := buildExternalTargets(ing)
+			log.Printf("external targets found: %d\n", len(externalTargets))
+
+			for _, t := range externalTargets {
+				log.Printf("adding external target: %+v\n", t)
 				controller.AddTarget(t)
-				store.GetOrCreateService(t.ServiceID)
+				if _, err := store.GetOrCreateService(t.ServiceID); err != nil {
+					log.Printf("failed to create external service: %v", err)
+				}
 			}
 		},
 		DeleteFunc: func(obj interface{}) {
+			log.Println("Ingress DELETE event")
 			ing := obj.(*networkingv1.Ingress)
 
 			for _, t := range buildInternalTargets(clientset, ing) {
+				log.Printf("removing internal target: %+v\n", t)
 				controller.RemoveTarget(t)
 				store.DeleteService(t.ServiceID)
 			}
 			for _, t := range buildExternalTargets(ing) {
+				log.Printf("removing external target: %+v\n", t)
 				controller.RemoveTarget(t)
 				store.DeleteService(t.ServiceID)
 			}
@@ -133,8 +192,14 @@ func main() {
 
 	crdInf.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
+			log.Println("CRD ADD event")
 			u := obj.(*unstructured.Unstructured)
-			spec := u.Object["spec"].(map[string]interface{})
+
+			spec, ok := u.Object["spec"].(map[string]interface{})
+			if !ok {
+				log.Println("invalid CRD spec")
+				return
+			}
 
 			serviceID := u.GetName()
 			if v, ok := spec["serviceID"].(string); ok && v != "" {
@@ -142,6 +207,8 @@ func main() {
 			}
 
 			url, _ := spec["url"].(string)
+
+			log.Printf("adding CRD target: serviceID=%s url=%s\n", serviceID, url)
 
 			controller.AddTarget(internal.Target{
 				ServiceID: serviceID,
@@ -149,11 +216,18 @@ func main() {
 				Internal:  false,
 			})
 
-			store.GetOrCreateService(serviceID)
+			if _, err := store.GetOrCreateService(serviceID); err != nil {
+				log.Printf("failed to create CRD service: %v", err)
+			}
 		},
 		DeleteFunc: func(obj interface{}) {
+			log.Println("CRD DELETE event")
 			u := obj.(*unstructured.Unstructured)
-			spec := u.Object["spec"].(map[string]interface{})
+
+			spec, ok := u.Object["spec"].(map[string]interface{})
+			if !ok {
+				return
+			}
 
 			serviceID := u.GetName()
 			if v, ok := spec["serviceID"].(string); ok && v != "" {
@@ -162,40 +236,68 @@ func main() {
 
 			url, _ := spec["url"].(string)
 
+			log.Printf("removing CRD target: serviceID=%s url=%s\n", serviceID, url)
+
 			controller.RemoveTarget(internal.Target{
 				ServiceID: serviceID,
 				URL:       url,
 			})
 
-			store.DeleteService(serviceID)
+			if err := store.DeleteService(serviceID); err != nil {
+				log.Printf("failed to delete CRD service: %v", err)
+			}
 		},
 	})
 
 	stopCh := make(chan struct{})
 	defer close(stopCh)
 
+	log.Println("starting informers")
 	go ingInformer.Run(stopCh)
 	go crdInf.Run(stopCh)
 
-	cache.WaitForCacheSync(stopCh, ingInformer.HasSynced, crdInf.HasSynced)
+	log.Println("waiting for cache sync")
+	if !cache.WaitForCacheSync(stopCh, ingInformer.HasSynced, crdInf.HasSynced) {
+		log.Println("cache sync failed")
+	} else {
+		log.Println("cache sync completed")
+	}
 
+	log.Println("starting prober")
 	prober := internal.NewProber(store, controller)
 	prober.Start()
 	defer prober.Stop()
 
+	log.Println("setting up API")
 	api := internal.NewAPI(store)
 	mux := http.NewServeMux()
 	api.RegisterRoutes(mux)
 
-	server := &http.Server{Addr: ":8080", Handler: mux}
+	server := &http.Server{
+		Addr:    ":8080",
+		Handler: mux,
+	}
+
+	log.Println("starting HTTP server on :8080")
+
+	go func() {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("server failed: %v", err)
+		}
+	}()
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 
-	go server.ListenAndServe()
-
+	log.Println("waiting for shutdown signal")
 	<-sig
-	server.Shutdown(ctx)
+
+	log.Println("shutting down server")
+	if err := server.Shutdown(ctx); err != nil {
+		log.Printf("server shutdown error: %v", err)
+	}
+
+	log.Println("evmon stopped")
 }
 
 func buildInternalTargets(cs *kubernetes.Clientset, ing *networkingv1.Ingress) []internal.Target {
@@ -212,6 +314,7 @@ func buildInternalTargets(cs *kubernetes.Clientset, ing *networkingv1.Ingress) [
 			if port == 0 && path.Backend.Service.Port.Name != "" {
 				s, err := cs.CoreV1().Services(ing.Namespace).Get(context.TODO(), svc, metav1.GetOptions{})
 				if err != nil {
+					log.Printf("failed to resolve named port: %v", err)
 					continue
 				}
 				for _, p := range s.Spec.Ports {
@@ -222,6 +325,7 @@ func buildInternalTargets(cs *kubernetes.Clientset, ing *networkingv1.Ingress) [
 			}
 
 			if port == 0 {
+				log.Printf("skipping target, port unresolved: %s/%s\n", ing.Namespace, svc)
 				continue
 			}
 
