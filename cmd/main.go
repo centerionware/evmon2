@@ -1,29 +1,51 @@
-// cmd/main.go
 package main
 
 import (
+	"context"
 	"database/sql"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
-	_ "github.com/lib/pq" // Postgres driver
+	_ "modernc.org/sqlite"             // SQLite driver
+	_ "github.com/lib/pq"              // Postgres driver
+	_ "github.com/go-sql-driver/mysql" // MariaDB/MySQL driver
 	"centerionware.com/evmon/internal"
 )
 
 func main() {
-	// Database connection (Postgres example)
-	dbURL := os.Getenv("EVMON_DATABASE_URL")
-	if dbURL == "" {
-		dbURL = "postgres://user:pass@localhost:5432/evmon?sslmode=disable"
+	dbType := os.Getenv("EVMON_DB_TYPE")       // "sqlite", "postgres", "mariadb"
+	dbURL := os.Getenv("EVMON_DATABASE_URL")   // full connection string
+
+	var db *sql.DB
+	var err error
+
+	switch dbType {
+	case "", "sqlite":
+		// Default to SQLite if empty or explicitly sqlite
+		if dbURL == "" {
+			dbURL = "file:evmon.db?_foreign_keys=on"
+		}
+		db, err = sql.Open("sqlite", dbURL)
+	case "postgres":
+		if dbURL == "" {
+			log.Fatal("EVMON_DATABASE_URL must be set for Postgres")
+		}
+		db, err = sql.Open("postgres", dbURL)
+	case "mariadb":
+		if dbURL == "" {
+			log.Fatal("EVMON_DATABASE_URL must be set for MariaDB")
+		}
+		db, err = sql.Open("mysql", dbURL)
+	default:
+		log.Fatalf("unsupported EVMON_DB_TYPE: %s", dbType)
 	}
 
-	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
-		log.Fatalf("failed to connect to database: %v", err)
+		log.Fatalf("failed to open database: %v", err)
 	}
 	defer db.Close()
 
@@ -36,20 +58,42 @@ func main() {
 		log.Fatalf("failed to create controller: %v", err)
 	}
 
-	// Initial sync of ingresses and CRDs
-	if err := controller.SyncIngresses(nil); err != nil {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Initial sync
+	if err := controller.SyncIngresses(ctx); err != nil {
 		log.Printf("warning: failed to sync ingresses: %v", err)
 	}
-	if err := controller.SyncCRDs(nil); err != nil {
+	if err := controller.SyncCRDs(ctx); err != nil {
 		log.Printf("warning: failed to sync CRDs: %v", err)
 	}
 
-	// Initialize prober
+	// Periodic resync
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := controller.SyncIngresses(ctx); err != nil {
+					log.Printf("warning: failed to sync ingresses: %v", err)
+				}
+				if err := controller.SyncCRDs(ctx); err != nil {
+					log.Printf("warning: failed to sync CRDs: %v", err)
+				}
+			}
+		}
+	}()
+
+	// Start prober
 	prober := internal.NewProber(store, controller)
 	prober.Start()
 	defer prober.Stop()
 
-	// Start HTTP API
+	// HTTP API
 	api := internal.NewAPI(store)
 	mux := http.NewServeMux()
 	api.RegisterRoutes(mux)
@@ -59,7 +103,7 @@ func main() {
 		Handler: mux,
 	}
 
-	// Graceful shutdown on SIGINT/SIGTERM
+	// Graceful shutdown
 	stopCh := make(chan os.Signal, 1)
 	signal.Notify(stopCh, syscall.SIGINT, syscall.SIGTERM)
 
@@ -72,5 +116,9 @@ func main() {
 
 	<-stopCh
 	log.Println("shutting down Evmon...")
-	server.Close()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Printf("HTTP server shutdown error: %v", err)
+	}
 }
