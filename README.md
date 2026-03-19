@@ -16,7 +16,8 @@ metadata:
 spec:
   interval: 1m0s
   url: https://github.com/centerionware/evmon.git
-  branch: main
+  reference:
+    branch: main
 ---
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
@@ -25,7 +26,7 @@ metadata:
   namespace: evmon
 spec:
   interval: 5m0s
-  path: ./kubernetes/overlays/dev/kustomization.yaml
+  path: ./kubernetes/overlays/dev
   prune: true
   sourceRef:
     kind: GitRepository
