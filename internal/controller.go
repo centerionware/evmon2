@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -16,10 +16,10 @@ import (
 
 // Controller maintains the list of targets
 type Controller struct {
-	clientset    *kubernetes.Clientset
-	dynClient    dynamic.Interface
-	targets      map[string]Target // key = serviceID+URL
-	mu           sync.RWMutex
+	clientset *kubernetes.Clientset
+	dynClient dynamic.Interface
+	targets   map[string]Target // key = serviceID+URL
+	mu        sync.RWMutex
 }
 
 // NewController creates a new Controller
@@ -84,6 +84,7 @@ func (c *Controller) SyncIngresses(ctx context.Context) error {
 					ServiceID: serviceID,
 					URL:       url,
 					Internal:  true,
+					Interval:  30 * time.Second, // internal endpoints always 30s
 				}
 			}
 		}
@@ -94,7 +95,6 @@ func (c *Controller) SyncIngresses(ctx context.Context) error {
 
 // SyncCRDs fetches all EvmonEndpoint CRDs for external monitoring
 func (c *Controller) SyncCRDs(ctx context.Context) error {
-	// Define the GVR for our EvmonEndpoint CRD
 	evmonGVR := schema.GroupVersionResource{
 		Group:    "evmon.centerionware.com",
 		Version:  "v1",
@@ -110,15 +110,27 @@ func (c *Controller) SyncCRDs(ctx context.Context) error {
 	defer c.mu.Unlock()
 
 	for _, obj := range crds.Items {
-		// obj is unstructured, extract fields
-		spec := obj.Object["spec"].(map[string]interface{})
+		spec, ok := obj.Object["spec"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+
 		url, ok := spec["url"].(string)
 		if !ok || url == "" {
 			continue
 		}
+
 		serviceID, ok := spec["serviceID"].(string)
 		if !ok || serviceID == "" {
 			serviceID = obj.GetName()
+		}
+
+		// Use CRD-defined intervalSeconds if provided; otherwise default to 300s (5min)
+		interval := 300 // seconds
+		if val, ok := spec["intervalSeconds"].(int64); ok && val > 0 {
+			interval = int(val)
+		} else if valf, ok := spec["intervalSeconds"].(float64); ok && valf > 0 {
+			interval = int(valf)
 		}
 
 		key := serviceID + url
@@ -126,6 +138,7 @@ func (c *Controller) SyncCRDs(ctx context.Context) error {
 			ServiceID: serviceID,
 			URL:       url,
 			Internal:  false,
+			Interval:  time.Duration(interval) * time.Second, // use seconds directly
 		}
 	}
 
