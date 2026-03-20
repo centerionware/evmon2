@@ -55,7 +55,7 @@ metadata:
   namespace: evmon
 spec:
   interval: 1m0s
-  url: https://github.com/centerionware/evmon.git
+  url: https://github.com/centerionware/evmon2.git
   ref:
     branch: main
 ---
