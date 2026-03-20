@@ -78,8 +78,6 @@ spec:
 
 ## Usage
 
-## Usage
-
 1. Deploy Evmon using the Kustomization.  
 2. Create `EvmonEndpoint` CRDs for any custom URLs you want to monitor.  
 3. Retrieve the generated `ADMIN_KEY` secret:
