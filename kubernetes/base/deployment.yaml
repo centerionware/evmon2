@@ -47,7 +47,7 @@ spec:
               echo "Done"
       containers:
         - name: evmon
-          image: ghcr.io/centerionware/evmon:latest
+          image: ghcr.io/centerionware/evmon2:latest
           imagePullPolicy: Always
           env:
             - name: EVMON_DB_TYPE
