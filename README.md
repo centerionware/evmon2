@@ -12,10 +12,11 @@ Evmon also provides CRDs for monitoring custom URLs.
 - Probes internal services every 30 seconds.
 - Probes external URLs every 5 minutes.
 - Supports custom URL monitoring via CRDs.
-- Provides `/status` and `/history` endpoints.
+- Provides `/status` and `/history` endpoints accessible only to client applications that are registered (See below)
 - Stores only changes in the database to minimize storage.
-- Uses RBAC to ensure security.
+- Uses RBAC to ensure security within the cluster
 - Lightweight and easy to deploy.
+- Post Quantum encryption for client->backend communications
 
 ---
 
@@ -120,7 +121,13 @@ spec:
 
 ## Security
 
-Evmon leverages Kubernetes RBAC to limit access and ensure security.  
+Evmon leverages Kubernetes RBAC to limit access and ensure security when accessing cluster resources.  
+
+We use a quantum resistant asymmetrical algorithm for UI -> backend communications. Backend must be hosted behind an ingress with a valid SSL certificate to prevent MITM and protect from leaking any PSK's. 
+
+A leak of a client id and PSK would result in unauthorized clients being able to register.
+As of now it's HIGHLY untested. 
+It _should_ in the end allow only one client per client_id with a PSK, client PSK's are all unique. There will eventually be a method to revoke access to a specific client id if it gets leaked.
 
 ---
 
@@ -134,10 +141,10 @@ Evmon leverages Kubernetes RBAC to limit access and ensure security.
 
 ## Design Philosophy
 
-KISS. This is meant to be a simple backend. There will never be a builtin UI or Notification utility. Those are meant to be seperate isolated components. Once the other utilities are in place this API shouldn't be exposed to the internet, unless behind an ingress with a header key required as a password to prevent unauthorized access. This exposes the internal layout of the kubernetes cluster to a degree which may make some uncomfortable.
+KISS. This is meant to be a simple backend. There will never be a builtin UI or Notification utility. Those are meant to be seperate isolated components. 
 
 ---
 
 ## License
 
-[MIT LicLicens](License)
+[MIT License](LICENSE)
