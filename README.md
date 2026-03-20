@@ -78,10 +78,28 @@ spec:
 
 ## Usage
 
-1. Deploy Evmon using the kustomization.  
-2. Create `EvmonEndpoint` CRDs for any custom URLs.  
-3. Access `/status` to see the current state of services.  
-4. Access `/history?service_id=<ID>` to see historical changes for a service.  
+## Usage
+
+1. Deploy Evmon using the Kustomization.  
+2. Create `EvmonEndpoint` CRDs for any custom URLs you want to monitor.  
+3. Retrieve the generated `ADMIN_KEY` secret:
+
+kubectl -n evmon get secret evmon-admin-secret -o jsonpath="{.data.admin_key}" | base64 --decode
+
+4. Use the `ADMIN_KEY` to call the `/create_client` endpoint:  
+   - Include the key in the HTTP header `X-Admin-PSK`.  
+   - This endpoint will generate a **client ID** and **client PSK**.  
+   - Example:
+
+curl -X POST https://<evmon-service>/create_client \
+  -H "X-Admin-PSK: <ADMIN_KEY>" \
+  -d '{"name":"frontend"}'
+
+5. Provide the **client ID** and **client PSK** to the frontend or UI application (once developed).  
+   - Only the UI app can use these credentials to securely access `/status` and `/history`.  
+   - End users themselves **cannot directly access these endpoints**; the system is designed for secure client access only.  
+
+> Note: The `ADMIN_KEY` is solely for creating clients. All subsequent access requires the client credentials, keeping Evmon’s endpoints secure and protected from direct human or script access.  
 
 ---
 
