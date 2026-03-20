@@ -15,8 +15,12 @@ type API struct {
 }
 
 func NewAPI(store *DBStore) *API {
-	return &API{store: store}
+	return &API{
+      store: store,
+      clientHook: nil,
+    }
 }
+
 
 func (api *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/status", api.handleStatus)
