@@ -1,26 +1,23 @@
-name: Sync from Upstream
+name: Sync from Upstream (Skip .github and .git)
 
-# Trigger manually
 on:
   workflow_dispatch:
 
-# Explicit permissions
 permissions:
-  contents: write       # allow pushing branches and files
-  workflows: write      # allow updating workflow files
+  contents: write
 
 jobs:
   sync-upstream:
     runs-on: ubuntu-latest
 
     steps:
-      # Checkout the repository
+      # Checkout GitHub repo
       - name: Checkout GitHub repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # Configure git user
+      # Configure git identity
       - name: Configure Git
         run: |
           git config user.name "GitHub Actions"
@@ -32,28 +29,35 @@ jobs:
           git remote add upstream https://git.centerionware.com/0xdeadc0de/evmon.git
           git fetch upstream
 
-      # Create branch from upstream and push
-      - name: Create PR branch with upstream changes
+      # Merge upstream files except .github and .git
+      - name: Merge upstream (skip .github and .git)
         run: |
+          # Determine upstream default branch
           UPSTREAM_BRANCH=$(git remote show upstream | grep 'HEAD branch' | awk '{print $NF}')
           echo "Upstream default branch: $UPSTREAM_BRANCH"
 
-          # Create new branch
-          git checkout -b sync-from-upstream
+          # Clone upstream into temporary directory
+          TMPDIR=$(mktemp -d)
+          git clone --branch $UPSTREAM_BRANCH --depth 1 https://git.centerionware.com/0xdeadc0de/evmon.git "$TMPDIR"
 
-          # Reset branch to upstream commit
-          git reset --hard upstream/$UPSTREAM_BRANCH
+          # Copy all files except .github and .git
+          rsync -av --exclude='.github' --exclude='.git' "$TMPDIR/" .
 
-          # Push branch to GitHub (GITHUB_TOKEN used automatically)
-          git push -u origin sync-from-upstream --force
+          # Clean up
+          rm -rf "$TMPDIR"
 
-      # Create a Pull Request
-      - name: Create Pull Request
-        uses: peter-evans/create-pull-request@v5
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          title: "Sync from upstream"
-          body: "This PR updates GitHub main with the latest changes from upstream."
-          base: main
-          head: sync-from-upstream
-          draft: false
+          # Stage all changes
+          git add .
+
+          # Commit if there are changes
+          if ! git diff-index --quiet HEAD; then
+            git commit -m "Sync from upstream (skipping .github and .git folders)"
+          else
+            echo "No changes to commit"
+            exit 0
+          fi
+
+      # Push changes to GitHub main
+      - name: Push to GitHub
+        run: |
+          git push origin main
