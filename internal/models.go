@@ -50,10 +50,9 @@ type Store interface {
 }
 
 // ---------------------------------------------------
-// New Client Models for client_hook.go
+// Client Models
 // ---------------------------------------------------
 
-// ClientType defines whether a client is a UI or Notifier
 type ClientType string
 
 const (
@@ -71,9 +70,38 @@ type Client struct {
 	LastSeen      time.Time  `json:"last_seen"`       // last time this client pinged /register
 }
 
-// ClientPushInfo represents in-memory runtime info for push notifications
+// ClientPushInfo holds in-memory push info for a registered client
 type ClientPushInfo struct {
 	CurrentPubKey string // ephemeral PQ key for encryption
-	NextPubKey    string // ephemeral next PQ key, rotates after each push
+	NextPubKey    string // ephemeral next PQ key for rotation
 	CallbackURL   string // target endpoint for updates
+}
+
+// ---------------------------------------------------
+// ClientHook Interface
+// ---------------------------------------------------
+
+// ClientHook encapsulates all functions related to client management
+// including registration, PQ encryption, and push notifications
+type ClientHook interface {
+	// Run migrations for the clients table
+	MigrateClients() error
+
+	// Create a new client in the DB (used for /create_client)
+	CreateClient() (*Client, error)
+
+	// Register a client (used for /register endpoint)
+	RegisterClient(clientID, psk, clientType, callbackURL, publicKey string) error
+
+	// Get a client by ID
+	GetClient(clientID string) (*Client, error)
+
+	// List all registered clients
+	ListClients() ([]Client, error)
+
+	// Send a push to a single client (encrypt + handle NextKey)
+	SendPush(clientID string, payload []byte) error
+
+	// Send a push to all registered clients asynchronously
+	SendPushToAll(payload []byte) error
 }
