@@ -297,6 +297,8 @@ func main() {
 	log.Println("setting up API")
 	api := internal.NewAPI(store)
 	mux := http.NewServeMux()
+    store.SetClientHook(client_hook)
+    api.SetClientHook(client_hook)
 	api.RegisterRoutes(mux)
     client_hook.RegisterRoutes(mux)
 
