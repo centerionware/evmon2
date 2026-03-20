@@ -12,7 +12,39 @@ spec:
       labels:
         app: evmon
     spec:
-      serviceAccountName: evmon
+      serviceAccountName: evmon-secret-gen   # Use the SA with limited secret permissions
+      initContainers:
+        - name: generate-admin-key
+          image: alpine/openssl:3.5.5
+          command:
+            - /bin/sh
+            - -c
+            - |
+              # --- detect architecture ---
+              ARCH=$(uname -m)
+              case "$ARCH" in
+                x86_64) ARCH="amd64" ;;
+                aarch64) ARCH="arm64" ;;
+                *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
+              esac
+
+              # --- download kubectl dynamically ---
+              K8S_VER=$(wget -qO- https://dl.k8s.io/release/stable.txt)
+              wget -q -O /usr/local/bin/kubectl https://dl.k8s.io/release/$K8S_VER/bin/linux/$ARCH/kubectl
+              chmod +x /usr/local/bin/kubectl
+
+              # --- generate secret only if it doesn't exist ---
+              if kubectl get secrets -n evmon --no-headers | awk '{print $1}' | grep -q "^evmon-admin-secret$"; then
+                echo "Secret already exists, skipping generation"
+              else
+                ADMIN_KEY=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+                echo "Creating secret with ADMIN_KEY=$ADMIN_KEY"
+                kubectl create secret generic evmon-admin-secret \
+                  --from-literal=admin_key=$ADMIN_KEY \
+                  -n evmon
+              fi
+
+              echo "Done"
       containers:
         - name: evmon
           image: ghcr.io/centerionware/evmon:latest
@@ -22,6 +54,11 @@ spec:
               value: "sqlite"
             - name: EVMON_DATABASE_URL
               value: "file:/data/evmon.db?_foreign_keys=on&cache=shared"
+            - name: ADMIN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: evmon-admin-secret
+                  key: admin_key
           ports:
             - containerPort: 8080
           volumeMounts:
