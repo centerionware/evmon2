@@ -11,10 +11,72 @@ import (
 	"net/http"
 	"sync"
 	"time"
+    "net/http"
 
 	"github.com/cloudflare/circl/kem/kyber/kyber512"
 	"github.com/google/uuid"
 )
+
+// ---------------------------------------------------
+// RegisterRoutes sets up HTTP endpoints for clients
+// ---------------------------------------------------
+
+func (c *ClientHookImpl) RegisterRoutes(mux *http.ServeMux, sharedPSK string) {
+	mux.HandleFunc("/create_client", func(w http.ResponseWriter, r *http.Request) {
+		// Protect with shared PSK
+		if r.Header.Get("X-PSK") != sharedPSK {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		client, err := c.CreateClient()
+		if err != nil {
+			http.Error(w, fmt.Sprintf("failed to create client: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		json.NewEncoder(w).Encode(client)
+	})
+
+	mux.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Protect with shared PSK
+		if r.Header.Get("X-PSK") != sharedPSK {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		var req struct {
+			ClientID    string `json:"client_id"`
+			ClientType  string `json:"type"`
+			CallbackURL string `json:"callback_url"`
+			PubKey      string `json:"public_key"`
+			PSK         string `json:"psk"`
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, fmt.Sprintf("invalid request: %v", err), http.StatusBadRequest)
+			return
+		}
+
+		if err := c.RegisterClient(req.ClientID, req.PSK, req.ClientType, req.CallbackURL, req.PubKey); err != nil {
+			http.Error(w, fmt.Sprintf("registration failed: %v", err), http.StatusUnauthorized)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Optional /update endpoint stub for internal testing or client callbacks
+	mux.HandleFunc("/update", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"status":"ok"}`)
+	})
+}
 
 // ---------------------------------------------------
 // Implementation of ClientHook interface
