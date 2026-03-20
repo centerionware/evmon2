@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,28 +17,42 @@ import (
 )
 
 // ---------------------------------------------------
-// Database Migration
+// Implementation of ClientHook interface
 // ---------------------------------------------------
 
-func (s *DBStore) MigrateClients() error {
-	statements := []string{
-		`CREATE TABLE IF NOT EXISTS clients (
-			client_id TEXT PRIMARY KEY,
-			type TEXT NOT NULL,
-			callback_url TEXT NOT NULL,
-			current_pubkey TEXT NOT NULL,
-			client_psk TEXT NOT NULL,
-			last_seen TIMESTAMP NOT NULL
-		);`,
-	}
+type ClientHookImpl struct {
+	db     *sql.DB
+	dbType string
+	mu     sync.Mutex
+	// runtime in-memory map of client push info
+	clients map[string]*ClientPushInfo
+}
 
-	for _, stmt := range statements {
-		if _, err := s.db.Exec(stmt); err != nil {
-			return err
-		}
+// Constructor
+func NewClientHook(db *sql.DB, dbType string) *ClientHookImpl {
+	return &ClientHookImpl{
+		db:      db,
+		dbType:  dbType,
+		clients: make(map[string]*ClientPushInfo),
 	}
+}
 
-	return nil
+// ---------------------------------------------------
+// Migration
+// ---------------------------------------------------
+
+func (c *ClientHookImpl) MigrateClients() error {
+	stmt := `
+	CREATE TABLE IF NOT EXISTS clients (
+		client_id TEXT PRIMARY KEY,
+		type TEXT NOT NULL,
+		callback_url TEXT NOT NULL,
+		current_pubkey TEXT NOT NULL,
+		client_psk TEXT NOT NULL,
+		last_seen TIMESTAMP NOT NULL
+	);`
+	_, err := c.db.Exec(stmt)
+	return err
 }
 
 // ---------------------------------------------------
@@ -59,106 +72,100 @@ func generateClientID() string {
 }
 
 // ---------------------------------------------------
-// /create_client Handler (admin only)
+// Create Client (/create_client)
 // ---------------------------------------------------
 
-func (s *DBStore) CreateClientHandler() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		clientID := generateClientID()
-		psk, err := generatePSK(32)
-		if err != nil {
-			http.Error(w, "failed to generate PSK", http.StatusInternalServerError)
-			return
-		}
-
-		now := time.Now()
-		_, err = s.db.Exec(
-			`INSERT INTO clients(client_id, type, callback_url, current_pubkey, client_psk, last_seen) 
-			 VALUES(?, ?, ?, ?, ?, ?)`,
-			clientID, "", "", "", psk, now,
-		)
-		if err != nil {
-			http.Error(w, "failed to store client", http.StatusInternalServerError)
-			return
-		}
-
-		resp := map[string]string{
-			"client_id":  clientID,
-			"client_psk": psk,
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+func (c *ClientHookImpl) CreateClient() (*Client, error) {
+	clientID := generateClientID()
+	psk, err := generatePSK(32)
+	if err != nil {
+		return nil, err
 	}
-}
 
-// ---------------------------------------------------
-// /register Handler
-// ---------------------------------------------------
-
-type RegisterRequest struct {
-	Type      string `json:"type"`         // "ui" or "notifications"
-	Callback  string `json:"callback_url"` // full URL to /update or /initialize
-	PublicKey string `json:"public_key"`   // base64 ephemeral PQ public key
-}
-
-type RegisterResponse struct {
-	ClientID string `json:"client_id"`
-	Ack      string `json:"ack"`
-}
-
-func (s *DBStore) RegisterHandler() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		clientID := r.Header.Get("X-Client-ID")
-		psk := r.Header.Get("X-Evmon-Key")
-		if clientID == "" || psk == "" {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-
-		var storedPSK string
-		err := s.db.QueryRow(
-			"SELECT client_psk FROM clients WHERE client_id=?",
-			clientID,
-		).Scan(&storedPSK)
-		if err != nil || storedPSK != psk {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-
-		var req RegisterRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid request", http.StatusBadRequest)
-			return
-		}
-
-		now := time.Now()
-		_, err = s.db.Exec(
-			`UPDATE clients SET type=?, callback_url=?, current_pubkey=?, last_seen=? WHERE client_id=?`,
-			req.Type, req.Callback, req.PublicKey, now, clientID,
-		)
-		if err != nil {
-			http.Error(w, "failed to update client", http.StatusInternalServerError)
-			return
-		}
-
-		// Initialize in-memory push info
-		clientPushMap[clientID] = &ClientPushInfo{
-			CurrentPubKey: req.PublicKey,
-			NextPubKey:    "",
-			CallbackURL:   req.Callback,
-		}
-
-		resp := RegisterResponse{
-			ClientID: clientID,
-			Ack:      "registered",
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+	now := time.Now()
+	_, err = c.db.Exec(
+		`INSERT INTO clients(client_id, type, callback_url, current_pubkey, client_psk, last_seen)
+		 VALUES(?, ?, ?, ?, ?, ?)`,
+		clientID, "", "", "", psk, now,
+	)
+	if err != nil {
+		return nil, err
 	}
+
+	return &Client{
+		ClientID:  clientID,
+		ClientPSK: psk,
+	}, nil
 }
 
 // ---------------------------------------------------
-// PQ Encryption Helpers
+// Register Client (/register)
+// ---------------------------------------------------
+
+func (c *ClientHookImpl) RegisterClient(clientID, psk, clientType, callbackURL, publicKey string) error {
+	var storedPSK string
+	err := c.db.QueryRow("SELECT client_psk FROM clients WHERE client_id=?", clientID).Scan(&storedPSK)
+	if err != nil {
+		return fmt.Errorf("client not found")
+	}
+	if storedPSK != psk {
+		return fmt.Errorf("unauthorized")
+	}
+
+	now := time.Now()
+	_, err = c.db.Exec(
+		`UPDATE clients SET type=?, callback_url=?, current_pubkey=?, last_seen=? WHERE client_id=?`,
+		clientType, callbackURL, publicKey, now, clientID,
+	)
+	if err != nil {
+		return err
+	}
+
+	// Update in-memory runtime map
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.clients[clientID] = &ClientPushInfo{
+		CurrentPubKey: publicKey,
+		NextPubKey:    "",
+		CallbackURL:   callbackURL,
+	}
+	return nil
+}
+
+// ---------------------------------------------------
+// Get / List Clients
+// ---------------------------------------------------
+
+func (c *ClientHookImpl) GetClient(clientID string) (*Client, error) {
+	row := c.db.QueryRow(`SELECT client_id, type, callback_url, current_pubkey, client_psk, last_seen FROM clients WHERE client_id=?`, clientID)
+	var cli Client
+	err := row.Scan(&cli.ClientID, &cli.Type, &cli.CallbackURL, &cli.CurrentPubKey, &cli.ClientPSK, &cli.LastSeen)
+	if err != nil {
+		return nil, err
+	}
+	return &cli, nil
+}
+
+func (c *ClientHookImpl) ListClients() ([]Client, error) {
+	rows, err := c.db.Query(`SELECT client_id, type, callback_url, current_pubkey, client_psk, last_seen FROM clients`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var clients []Client
+	for rows.Next() {
+		var cli Client
+		if err := rows.Scan(&cli.ClientID, &cli.Type, &cli.CallbackURL, &cli.CurrentPubKey, &cli.ClientPSK, &cli.LastSeen); err != nil {
+			return nil, err
+		}
+		clients = append(clients, cli)
+	}
+	return clients, nil
+}
+
+// ---------------------------------------------------
+// PQ Encryption Helper
 // ---------------------------------------------------
 
 func encryptWithPQ(clientPubKeyB64 string, message []byte) (string, error) {
@@ -178,7 +185,7 @@ func encryptWithPQ(clientPubKeyB64 string, message []byte) (string, error) {
 		return "", err
 	}
 
-	// In production, replace XOR with an AEAD using sharedSecret
+	// simple XOR for demo (replace with AEAD in prod)
 	ciphertext := make([]byte, len(message))
 	for i := range message {
 		ciphertext[i] = message[i] ^ sharedSecret[i%len(sharedSecret)]
@@ -189,63 +196,30 @@ func encryptWithPQ(clientPubKeyB64 string, message []byte) (string, error) {
 }
 
 // ---------------------------------------------------
-// Push Logic with PQ Encryption + Rotation
+// Push Logic
 // ---------------------------------------------------
 
-type ClientPushInfo struct {
-	sync.Mutex
-	CurrentPubKey string
-	NextPubKey    string
-	CallbackURL   string
-}
-
-var clientPushMap = map[string]*ClientPushInfo{}
-
-func RotateClientKey(clientID, nextPubKey string) {
-	info, ok := clientPushMap[clientID]
-	if !ok {
-		return
-	}
-	info.Lock()
-	defer info.Unlock()
-	info.CurrentPubKey = nextPubKey
-	info.NextPubKey = ""
-}
-
-type PushPayload struct {
-	EventID string `json:"event_id"`
-	Type    string `json:"type"`
-	Payload string `json:"payload"` // base64(KEM ciphertext + sym ciphertext)
-}
-
-type PushResponse struct {
-	NextPublicKey string `json:"next_public_key"`
-}
-
-func SendPush(clientID string, payload []byte) error {
-	info, ok := clientPushMap[clientID]
+func (c *ClientHookImpl) SendPush(clientID string, payload []byte) error {
+	c.mu.Lock()
+	info, ok := c.clients[clientID]
+	c.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("client not found")
 	}
 
-	info.Lock()
-	currentKey := info.CurrentPubKey
-	callbackURL := info.CallbackURL
-	info.Unlock()
-
-	encryptedB64, err := encryptWithPQ(currentKey, payload)
+	encryptedB64, err := encryptWithPQ(info.CurrentPubKey, payload)
 	if err != nil {
 		return err
 	}
 
-	pushBody := PushPayload{
-		EventID: uuid.New().String(),
-		Type:    "change",
-		Payload: encryptedB64,
+	pushBody := map[string]string{
+		"event_id": uuid.New().String(),
+		"type":     "change",
+		"payload":  encryptedB64,
 	}
 
 	data, _ := json.Marshal(pushBody)
-	req, err := http.NewRequest("POST", callbackURL, bytes.NewReader(data))
+	req, err := http.NewRequest("POST", info.CallbackURL, bytes.NewReader(data))
 	if err != nil {
 		return err
 	}
@@ -262,11 +236,42 @@ func SendPush(clientID string, payload []byte) error {
 		return fmt.Errorf("push failed %d", resp.StatusCode)
 	}
 
+	// Handle NextPublicKey rotation if client sends it
 	body, _ := io.ReadAll(resp.Body)
-	var pr PushResponse
+	var pr struct {
+		NextPublicKey string `json:"next_public_key"`
+	}
 	if err := json.Unmarshal(body, &pr); err == nil && pr.NextPublicKey != "" {
-		RotateClientKey(clientID, pr.NextPublicKey)
+		c.mu.Lock()
+		if info, ok := c.clients[clientID]; ok {
+			info.CurrentPubKey = pr.NextPublicKey
+			info.NextPubKey = ""
+		}
+		c.mu.Unlock()
 	}
 
+	return nil
+}
+
+// Push to all clients concurrently
+func (c *ClientHookImpl) SendPushToAll(payload []byte) error {
+	c.mu.Lock()
+	clients := make([]*ClientPushInfo, 0, len(c.clients))
+	ids := make([]string, 0, len(c.clients))
+	for id, info := range c.clients {
+		clients = append(clients, info)
+		ids = append(ids, id)
+	}
+	c.mu.Unlock()
+
+	var wg sync.WaitGroup
+	for i, info := range clients {
+		wg.Add(1)
+		go func(clientID string, info *ClientPushInfo) {
+			defer wg.Done()
+			_ = c.SendPush(clientID, payload) // ignore errors for async broadcast
+		}(ids[i], info)
+	}
+	wg.Wait()
 	return nil
 }
