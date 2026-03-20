@@ -21,10 +21,10 @@ import (
 // RegisterRoutes sets up HTTP endpoints for clients
 // ---------------------------------------------------
 
-func (c *ClientHookImpl) RegisterRoutes(mux *http.ServeMux, sharedPSK string) {
+func (c *ClientHookImpl) RegisterRoutes(mux *http.ServeMux, adminPSK string) {
 	mux.HandleFunc("/create_client", func(w http.ResponseWriter, r *http.Request) {
-		// Protect with shared PSK
-		if r.Header.Get("X-PSK") != sharedPSK {
+		// Only admin can create new clients
+		if r.Header.Get("X-Admin-PSK") != adminPSK {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -44,18 +44,12 @@ func (c *ClientHookImpl) RegisterRoutes(mux *http.ServeMux, sharedPSK string) {
 			return
 		}
 
-		// Protect with shared PSK
-		if r.Header.Get("X-PSK") != sharedPSK {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-
 		var req struct {
 			ClientID    string `json:"client_id"`
 			ClientType  string `json:"type"`
 			CallbackURL string `json:"callback_url"`
 			PubKey      string `json:"public_key"`
-			PSK         string `json:"psk"`
+			PSK         string `json:"psk"` // client-specific PSK from /create_client
 		}
 
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -63,6 +57,7 @@ func (c *ClientHookImpl) RegisterRoutes(mux *http.ServeMux, sharedPSK string) {
 			return
 		}
 
+		// Authenticate using **client-specific PSK**
 		if err := c.RegisterClient(req.ClientID, req.PSK, req.ClientType, req.CallbackURL, req.PubKey); err != nil {
 			http.Error(w, fmt.Sprintf("registration failed: %v", err), http.StatusUnauthorized)
 			return
@@ -71,13 +66,12 @@ func (c *ClientHookImpl) RegisterRoutes(mux *http.ServeMux, sharedPSK string) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	// Optional /update endpoint stub for internal testing or client callbacks
+	// /update stub for internal testing (clients may implement their own /update endpoint)
 	mux.HandleFunc("/update", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, `{"status":"ok"}`)
 	})
 }
-
 // ---------------------------------------------------
 // Implementation of ClientHook interface
 // ---------------------------------------------------
