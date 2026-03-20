@@ -89,20 +89,17 @@ func (api *API) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (api *API) handleHistory(w http.ResponseWriter, r *http.Request) {
+	// Optional query params
 	serviceID := r.URL.Query().Get("service_id")
-	if serviceID == "" {
-		http.Error(w, "missing service_id", http.StatusBadRequest)
-		return
-	}
+	fromStr := r.URL.Query().Get("from")
+	toStr := r.URL.Query().Get("to")
 
 	var from, to time.Time
 	var err error
 
-	fromStr := r.URL.Query().Get("from")
-	toStr := r.URL.Query().Get("to")
-
+	// Default: last 12 hours
 	if fromStr == "" {
-		from = time.Now().Add(-24 * time.Hour)
+		from = time.Now().Add(-12 * time.Hour)
 	} else {
 		from, err = time.Parse(time.RFC3339, fromStr)
 		if err != nil {
@@ -121,16 +118,32 @@ func (api *API) handleHistory(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	events, err := api.store.GetEventsInRange(serviceID, from, to)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			events = []Event{}
-		} else {
+	var results map[string][]Event = make(map[string][]Event)
+
+	if serviceID != "" {
+		// Single service
+		events, err := api.store.GetEventsInRange(serviceID, from, to)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "error fetching events: "+err.Error(), http.StatusInternalServerError)
 			return
+		}
+		results[serviceID] = events
+	} else {
+		// All services
+		services, err := api.store.ListServices()
+		if err != nil {
+			http.Error(w, "error fetching services: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		for _, svc := range services {
+			events, err := api.store.GetEventsInRange(svc.ID, from, to)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				continue // skip errors for individual services
+			}
+			results[svc.ID] = events
 		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(events)
+	json.NewEncoder(w).Encode(results)
 }
