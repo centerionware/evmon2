@@ -11,6 +11,7 @@ import (
 
 type API struct {
 	store *DBStore
+    clientHook *ClientHook
 }
 
 func NewAPI(store *DBStore) *API {
