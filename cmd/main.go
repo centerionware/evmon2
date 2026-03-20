@@ -63,8 +63,12 @@ func main() {
 	}()
 
 	store := internal.NewDBStore(db, dbType)
+    client_hook := internal.NewClientHook(db, dbType)
 	log.Println("running migrations")
 	if err := store.Migrate(); err != nil {
+		log.Fatalf("failed to migrate database: %v", err)
+	}
+    if err := client_hook.Migrate(); err != nil {
 		log.Fatalf("failed to migrate database: %v", err)
 	}
 
@@ -294,6 +298,7 @@ func main() {
 	api := internal.NewAPI(store)
 	mux := http.NewServeMux()
 	api.RegisterRoutes(mux)
+    client_hook.RegisterRoutes(mux)
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
