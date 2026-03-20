@@ -13,7 +13,7 @@ import (
 type DBStore struct {
 	db     *sql.DB
 	dbType string
-    clientHook *ClientHook
+    clientHook ClientHook
 }
 
 func NewDBStore(db *sql.DB, dbType string) *DBStore {
@@ -24,7 +24,7 @@ func NewDBStore(db *sql.DB, dbType string) *DBStore {
 	}
 }
 
-func (s *DBStore) SetClientHook(hook *ClientHook) {
+func (s *DBStore) SetClientHook(hook ClientHook) {
 	s.clientHook = hook
 }
 

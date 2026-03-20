@@ -11,7 +11,7 @@ import (
 
 type API struct {
 	store *DBStore
-    clientHook *ClientHook
+    clientHook ClientHook
 }
 
 func NewAPI(store *DBStore) *API {
@@ -21,7 +21,7 @@ func NewAPI(store *DBStore) *API {
     }
 }
 
-func (s *API) SetClientHook(hook *ClientHook) {
+func (s *API) SetClientHook(hook ClientHook) {
 	s.clientHook = hook
 }
 

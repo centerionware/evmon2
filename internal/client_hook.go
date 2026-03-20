@@ -180,7 +180,7 @@ func encryptWithPQ(clientPubKeyB64 string, message []byte) (string, error) {
 		return "", err
 	}
 
-	ct, sharedSecret, err := scheme.Encapsulate(pubKey, rand.Reader)
+	ct, sharedSecret, err := scheme.Encapsulate(pubKey)
 	if err != nil {
 		return "", err
 	}
