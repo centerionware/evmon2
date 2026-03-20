@@ -300,7 +300,7 @@ func main() {
     store.SetClientHook(client_hook)
     api.SetClientHook(client_hook)
 	api.RegisterRoutes(mux)
-    client_hook.RegisterRoutes(mux)
+    client_hook.RegisterRoutes(mux, os.Getenv("ADMIN_KEY"))
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
