@@ -21,6 +21,9 @@ func NewAPI(store *DBStore) *API {
     }
 }
 
+func (s *API) SetClientHook(hook *ClientHook) {
+	s.clientHook = hook
+}
 
 func (api *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/status", api.handleStatus)
