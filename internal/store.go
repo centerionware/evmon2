@@ -145,6 +145,21 @@ func (s *DBStore) InsertEventIfChanged(serviceID string, status Status) error {
 		)
 	}
 
+    // ---------------------------------------------------
+	// Trigger async push to all registered clients
+	// ---------------------------------------------------
+	if s.clientHook != nil {
+		go func() {
+			payload := map[string]interface{}{
+				"service_id": serviceID,
+				"status":     status,
+				"timestamp":  now,
+			}
+			data, _ := json.Marshal(payload)
+			_ = s.clientHook.SendPushToAll(data) // ignore errors for async broadcast
+		}()
+	}
+
 	_, err = s.db.Exec(upsert, serviceID, status, now)
 	return err
 }
