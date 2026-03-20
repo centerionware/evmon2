@@ -11,69 +11,13 @@ import (
 	"net/http"
 	"sync"
 	"time"
-    "net/http"
 
 	"github.com/cloudflare/circl/kem/kyber/kyber512"
 	"github.com/google/uuid"
 )
 
 // ---------------------------------------------------
-// RegisterRoutes sets up HTTP endpoints for clients
-// ---------------------------------------------------
-
-func (c *ClientHookImpl) RegisterRoutes(mux *http.ServeMux, adminPSK string) {
-	mux.HandleFunc("/create_client", func(w http.ResponseWriter, r *http.Request) {
-		// Only admin can create new clients
-		if r.Header.Get("X-Admin-PSK") != adminPSK {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-
-		client, err := c.CreateClient()
-		if err != nil {
-			http.Error(w, fmt.Sprintf("failed to create client: %v", err), http.StatusInternalServerError)
-			return
-		}
-
-		json.NewEncoder(w).Encode(client)
-	})
-
-	mux.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		var req struct {
-			ClientID    string `json:"client_id"`
-			ClientType  string `json:"type"`
-			CallbackURL string `json:"callback_url"`
-			PubKey      string `json:"public_key"`
-			PSK         string `json:"psk"` // client-specific PSK from /create_client
-		}
-
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, fmt.Sprintf("invalid request: %v", err), http.StatusBadRequest)
-			return
-		}
-
-		// Authenticate using **client-specific PSK**
-		if err := c.RegisterClient(req.ClientID, req.PSK, req.ClientType, req.CallbackURL, req.PubKey); err != nil {
-			http.Error(w, fmt.Sprintf("registration failed: %v", err), http.StatusUnauthorized)
-			return
-		}
-
-		w.WriteHeader(http.StatusOK)
-	})
-
-	// /update stub for internal testing (clients may implement their own /update endpoint)
-	mux.HandleFunc("/update", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"status":"ok"}`)
-	})
-}
-// ---------------------------------------------------
-// Implementation of ClientHook interface
+// ClientHook Implementation
 // ---------------------------------------------------
 
 type ClientHookImpl struct {
@@ -128,7 +72,7 @@ func generateClientID() string {
 }
 
 // ---------------------------------------------------
-// Create Client (/create_client)
+// Create Client (/create_client) - admin only
 // ---------------------------------------------------
 
 func (c *ClientHookImpl) CreateClient() (*Client, error) {
@@ -155,7 +99,7 @@ func (c *ClientHookImpl) CreateClient() (*Client, error) {
 }
 
 // ---------------------------------------------------
-// Register Client (/register)
+// Register Client (/register) - per-client PSK
 // ---------------------------------------------------
 
 func (c *ClientHookImpl) RegisterClient(clientID, psk, clientType, callbackURL, publicKey string) error {
@@ -165,7 +109,7 @@ func (c *ClientHookImpl) RegisterClient(clientID, psk, clientType, callbackURL, 
 		return fmt.Errorf("client not found")
 	}
 	if storedPSK != psk {
-		return fmt.Errorf("unauthorized")
+		return fmt.Errorf("unauthorized: invalid PSK")
 	}
 
 	now := time.Now()
@@ -241,7 +185,7 @@ func encryptWithPQ(clientPubKeyB64 string, message []byte) (string, error) {
 		return "", err
 	}
 
-	// simple XOR for demo (replace with AEAD in prod)
+	// Simple XOR for demonstration (replace with AEAD in production)
 	ciphertext := make([]byte, len(message))
 	for i := range message {
 		ciphertext[i] = message[i] ^ sharedSecret[i%len(sharedSecret)]
@@ -309,7 +253,6 @@ func (c *ClientHookImpl) SendPush(clientID string, payload []byte) error {
 	return nil
 }
 
-// Push to all clients concurrently
 func (c *ClientHookImpl) SendPushToAll(payload []byte) error {
 	c.mu.Lock()
 	clients := make([]*ClientPushInfo, 0, len(c.clients))
@@ -330,4 +273,58 @@ func (c *ClientHookImpl) SendPushToAll(payload []byte) error {
 	}
 	wg.Wait()
 	return nil
+}
+
+// ---------------------------------------------------
+// RegisterRoutes
+// ---------------------------------------------------
+
+func (c *ClientHookImpl) RegisterRoutes(mux *http.ServeMux, adminPSK string) {
+	mux.HandleFunc("/create_client", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Admin-PSK") != adminPSK {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		client, err := c.CreateClient()
+		if err != nil {
+			http.Error(w, fmt.Sprintf("failed to create client: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		json.NewEncoder(w).Encode(client)
+	})
+
+	mux.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var req struct {
+			ClientID    string `json:"client_id"`
+			ClientType  string `json:"type"`
+			CallbackURL string `json:"callback_url"`
+			PubKey      string `json:"public_key"`
+			PSK         string `json:"psk"`
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, fmt.Sprintf("invalid request: %v", err), http.StatusBadRequest)
+			return
+		}
+
+		if err := c.RegisterClient(req.ClientID, req.PSK, req.ClientType, req.CallbackURL, req.PubKey); err != nil {
+			http.Error(w, fmt.Sprintf("registration failed: %v", err), http.StatusUnauthorized)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// /update endpoint stub (clients implement their own /update to receive pushes)
+	mux.HandleFunc("/update", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"status":"ok"}`)
+	})
 }
