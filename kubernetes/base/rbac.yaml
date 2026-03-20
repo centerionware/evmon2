@@ -3,12 +3,21 @@ kind: Namespace
 metadata:
   name: evmon
 ---
+# Main ServiceAccount for evmon runtime
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: evmon
   namespace: evmon
 ---
+# ServiceAccount for init container to generate ADMIN_KEY
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: evmon-secret-gen
+  namespace: evmon
+---
+# ClusterRole for main evmon app
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -24,6 +33,7 @@ rules:
     resources: ["evmonendpoints"]
     verbs: ["get", "list", "watch"]
 ---
+# ClusterRoleBinding for main evmon app
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
@@ -35,4 +45,29 @@ subjects:
 roleRef:
   kind: ClusterRole
   name: evmon-cluster-role
+  apiGroup: rbac.authorization.k8s.io
+---
+# Namespace-scoped Role for secret generation (init container)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: evmon-secret-gen-role
+  namespace: evmon
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["list", "create"]
+---
+# RoleBinding for secret-gen ServiceAccount
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: evmon-secret-gen-role-binding
+  namespace: evmon
+subjects:
+  - kind: ServiceAccount
+    name: evmon-secret-gen
+roleRef:
+  kind: Role
+  name: evmon-secret-gen-role
   apiGroup: rbac.authorization.k8s.io
