@@ -26,8 +26,34 @@ func (s *API) SetClientHook(hook *ClientHook) {
 }
 
 func (api *API) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/status", api.handleStatus)
-	mux.HandleFunc("/history", api.handleHistory)
+	// Wrapper to enforce per-client PSK
+	withClientAuth := func(handler http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			clientID := r.Header.Get("X-Client-ID")
+			psk := r.Header.Get("X-Client-PSK")
+			if clientID == "" || psk == "" {
+				http.Error(w, "missing client credentials", http.StatusUnauthorized)
+				return
+			}
+
+			if api.clientHook == nil {
+				http.Error(w, "server misconfigured", http.StatusInternalServerError)
+				return
+			}
+
+			// Validate client
+			c, err := api.clientHook.GetClient(clientID)
+			if err != nil || c.ClientPSK != psk {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+
+			handler(w, r)
+		}
+	}
+
+	mux.HandleFunc("/status", withClientAuth(api.handleStatus))
+	mux.HandleFunc("/history", withClientAuth(api.handleHistory))
 }
 
 func (api *API) handleStatus(w http.ResponseWriter, r *http.Request) {
