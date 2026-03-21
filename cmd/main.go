@@ -68,7 +68,7 @@ func main() {
 	if err := store.Migrate(); err != nil {
 		log.Fatalf("failed to migrate database: %v", err)
 	}
-    if err := client_hook.Migrate(); err != nil {
+    if err := client_hook.MigrateClients(); err != nil {
 		log.Fatalf("failed to migrate database: %v", err)
 	}
 
